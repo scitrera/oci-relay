@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparkrun-oci-relay-plugin"
+version = "0.1.0"
+description = "Bounded OCI image distribution for Sparkrun"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "LICENSE_EXCEPTION"]
+authors = [{name = "Scitrera LLC"}]
+dependencies = ["sparkrun>=0.4.0,<0.5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.entry-points."sparkrun.plugins"]
+oci-relay = "sparkrun_oci_relay"
+
+[tool.setuptools.packages.find]
+where = ["plugin/src"]
+
+[tool.setuptools.package-data]
+sparkrun_oci_relay = ["releases.json", "LICENSE", "LICENSE_EXCEPTION"]
+
+[tool.pytest.ini_options]
+testpaths = ["plugin/tests"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

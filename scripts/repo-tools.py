@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+"""Use the shared toolkit from a local checkout or its pinned Git revision."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+SOURCE = "git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424"
+local = Path(os.environ.get("SCITRERA_REPO_TOOLS", "~/scitrera-repo-tools")).expanduser()
+env = os.environ.copy()
+if (local / "src/scitrera_repo_tools").is_dir():
+    env["PYTHONPATH"] = str(local / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    command = [sys.executable, "-m", "scitrera_repo_tools", *sys.argv[1:]]
+else:
+    command = ["uvx", "--from", SOURCE, "repo-tools", *sys.argv[1:]]
+raise SystemExit(subprocess.call(command, env=env, cwd=Path(__file__).resolve().parents[1]))

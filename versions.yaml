@@ -1,0 +1,52 @@
+# Canonical release versions and generated GitHub CI configuration.
+oci-relay: 0.1.0
+sparkrun-oci-relay-plugin: 0.1.0
+
+go_toolchain:
+  go: "1.25.0"
+
+project_rules:
+  oci-relay:
+    - {type: gomod, path: go.mod}
+    - {type: go_version, path: internal/buildinfo/buildinfo.go}
+  sparkrun-oci-relay-plugin:
+    - {type: pyproject, path: pyproject.toml}
+    - {type: init_py, path: plugin/src/sparkrun_oci_relay/__init__.py}
+
+preferred_versions:
+  python:
+    ruff: "0.15.6"
+
+ci:
+  repo_tools_source: "git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424"
+  check_generated_ci: true
+  test_branches: [main, develop-next]
+  only_workflows: [version-check, test-go, test-python, publish-go]
+  github_release: true
+  go:
+    go_version: "1.25.14"
+    lint: none
+    enable_govulncheck: true
+    govulncheck_version: "v1.1.4"
+    test_args: "-race -count=1"
+    verify_tag_version: oci-relay
+    setup_steps:
+      - name: Check Go formatting
+        run: 'test -z "$(gofmt -l cmd internal)"'
+    extra_steps:
+      - name: Check redistributed dependency licenses
+        run: 'python3 scripts/dependency-licenses.py --check'
+    binary_platforms: [linux/amd64, linux/arm64]
+    binaries:
+      - name: oci-relay
+        project: oci-relay
+        package: ./cmd/oci-relay
+        ldflags: "-s -w -buildid= -X github.com/scitrera/oci-relay/internal/buildinfo.Version=$VERSION -X github.com/scitrera/oci-relay/internal/buildinfo.Commit=$COMMIT"
+        extra_files: [LICENSE, LICENSE_EXCEPTION, COPYRIGHT, README.md, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt]
+  python:
+    test_versions: ["3.12", "3.13"]
+    lint: ruff
+    # Core 0.4.0 is being developed alongside this project. Unit tests do not
+    # import it; opt-in integration tests use its develop-next checkout.
+    install: 'pip install --no-deps -e . && pip install "pytest>=8"'
+    test_command: 'python -m pytest -q'

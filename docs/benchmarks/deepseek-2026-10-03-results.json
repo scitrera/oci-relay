@@ -1,0 +1,283 @@
+{
+  "builtin-cold": {
+    "method": "builtin",
+    "image": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+    "source_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+    "host": [
+      "host-b",
+      "host-c"
+    ],
+    "transfer_host": [
+      "host-b-data",
+      "host-c-data"
+    ],
+    "receiver_engines": {
+      "host-b": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      },
+      "host-c": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      }
+    },
+    "supplied_manifest": false,
+    "copy_seconds": 237.0841204719618,
+    "total_seconds": 237.0841210319195,
+    "received_ids": {
+      "host-b": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+      "host-c": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68"
+    },
+    "state": "COMPLETE",
+    "cleanup_errors": []
+  },
+  "builtin-cold-repeat": {
+    "method": "builtin",
+    "image": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+    "source_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+    "host": [
+      "host-b",
+      "host-c"
+    ],
+    "transfer_host": [
+      "host-b-data",
+      "host-c-data"
+    ],
+    "receiver_engines": {
+      "host-b": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      },
+      "host-c": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      }
+    },
+    "supplied_manifest": false,
+    "source_mode": "docker",
+    "copy_seconds": 239.36244370788336,
+    "total_seconds": 239.36244442802854,
+    "received_ids": {
+      "host-b": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+      "host-c": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68"
+    },
+    "state": "COMPLETE",
+    "cleanup_errors": []
+  },
+  "relay-uncompressed-cold": {
+    "method": "relay",
+    "image": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+    "source_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+    "host": [
+      "host-b",
+      "host-c"
+    ],
+    "transfer_host": [
+      "host-b-data",
+      "host-c-data"
+    ],
+    "receiver_engines": {
+      "host-b": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      },
+      "host-c": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      }
+    },
+    "supplied_manifest": false,
+    "source_mode": "oci-layout",
+    "source_limits": {
+      "max_buffer_bytes": 536870912,
+      "source_streams": 16
+    },
+    "target_limits": {
+      "host-b": {
+        "max_buffer_bytes": 536870912,
+        "source_streams": 16
+      },
+      "host-c": {
+        "max_buffer_bytes": 536870912,
+        "source_streams": 16
+      }
+    },
+    "preparation_seconds": 0.007759590866044164,
+    "copy_seconds": 117.60020972695202,
+    "relay_result": {
+      "metrics": {
+        "acquired_bytes": 43451327488,
+        "replays": 10,
+        "peak_buffer_bytes": 286261248,
+        "recent_bytes_per_second": 262549219.00814828
+      },
+      "receivers": {
+        "receiver-0": {
+          "version": 1,
+          "transfer": "benchmark-transfer-1",
+          "peer": "receiver-0",
+          "state": "COMPLETE",
+          "manifest_digest": "sha256:6a2afe5c2b37ff21ebcfbb9523e59d1907837ef15248e51589628dec4f0bae3b",
+          "image_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+          "tag": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+          "metrics": {
+            "acquired_bytes": 25003788800,
+            "replays": 0,
+            "peak_buffer_bytes": 207683584,
+            "recent_bytes_per_second": 129404416.185023
+          }
+        },
+        "receiver-1": {
+          "version": 1,
+          "transfer": "benchmark-transfer-1",
+          "peer": "receiver-1",
+          "state": "COMPLETE",
+          "manifest_digest": "sha256:6a2afe5c2b37ff21ebcfbb9523e59d1907837ef15248e51589628dec4f0bae3b",
+          "image_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+          "tag": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+          "metrics": {
+            "acquired_bytes": 25003788800,
+            "replays": 0,
+            "peak_buffer_bytes": 286261248,
+            "recent_bytes_per_second": 115356731.35345612
+          }
+        }
+      },
+      "state": "COMPLETE",
+      "transfer": "benchmark-transfer-1",
+      "type": "result",
+      "version": 1
+    },
+    "total_seconds": 119.11267912015319,
+    "received_ids": {
+      "host-b": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+      "host-c": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68"
+    },
+    "state": "COMPLETE",
+    "cleanup_errors": []
+  },
+  "relay-archive-cold": {
+    "method": "relay",
+    "image": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+    "source_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+    "host": [
+      "host-b",
+      "host-c"
+    ],
+    "transfer_host": [
+      "host-b-data",
+      "host-c-data"
+    ],
+    "receiver_engines": {
+      "host-b": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      },
+      "host-c": {
+        "ServerVersion": "29.2.1",
+        "Driver": "overlay2",
+        "Images": 0,
+        "Containers": 0
+      }
+    },
+    "supplied_manifest": false,
+    "source_mode": "docker-save",
+    "source_limits": {
+      "max_buffer_bytes": 536870912,
+      "source_streams": 16
+    },
+    "target_limits": {
+      "host-b": {
+        "max_buffer_bytes": 536870912,
+        "source_streams": 16
+      },
+      "host-c": {
+        "max_buffer_bytes": 536870912,
+        "source_streams": 16
+      }
+    },
+    "preparation_seconds": 127.70323750004172,
+    "copy_seconds": 115.40082689607516,
+    "relay_result": {
+      "export_first_byte_seconds": 103.232939983,
+      "metrics": {
+        "acquired_bytes": 42052212736,
+        "replays": 9,
+        "peak_buffer_bytes": 348585984,
+        "recent_bytes_per_second": 451292257.1127655
+      },
+      "peak_spool_reserved_bytes": 25003902464,
+      "preparation_bytes": 25003902464,
+      "preparation_seconds": 127.697763483,
+      "receivers": {
+        "receiver-0": {
+          "version": 1,
+          "transfer": "benchmark-transfer-2",
+          "peer": "receiver-0",
+          "state": "COMPLETE",
+          "manifest_digest": "sha256:6a2afe5c2b37ff21ebcfbb9523e59d1907837ef15248e51589628dec4f0bae3b",
+          "image_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+          "tag": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+          "metrics": {
+            "acquired_bytes": 25003788800,
+            "replays": 0,
+            "peak_buffer_bytes": 252772352,
+            "recent_bytes_per_second": 127076268.51559484
+          }
+        },
+        "receiver-1": {
+          "version": 1,
+          "transfer": "benchmark-transfer-2",
+          "peer": "receiver-1",
+          "state": "COMPLETE",
+          "manifest_digest": "sha256:6a2afe5c2b37ff21ebcfbb9523e59d1907837ef15248e51589628dec4f0bae3b",
+          "image_id": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+          "tag": "ghcr.io/spark-arena/dgx-vllm-eugr-nightly-b12x:latest",
+          "metrics": {
+            "acquired_bytes": 25003788800,
+            "replays": 0,
+            "peak_buffer_bytes": 259784704,
+            "recent_bytes_per_second": 123119140.1371862
+          }
+        }
+      },
+      "state": "COMPLETE",
+      "transfer": "benchmark-transfer-2",
+      "type": "result",
+      "version": 1
+    },
+    "total_seconds": 247.0963057500776,
+    "received_ids": {
+      "host-b": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68",
+      "host-c": "sha256:9633fa21089bc14a230bf7e26943204dcde204761a93957e344dd4f0a99d0b68"
+    },
+    "state": "COMPLETE",
+    "cleanup_errors": []
+  },
+  "docker-save-profile": {
+    "first_byte_seconds": 111.92096512485296,
+    "total_seconds": 137.4201137619093,
+    "archive_bytes": 25003903488,
+    "exit_code": 0
+  },
+  "uncompressed-preparation": {
+    "preparation_seconds": 104.53528491011821,
+    "export_rc": 0,
+    "extract_rc": 0
+  },
+  "public_evidence_note": "Host addresses, machine/interface identifiers and transfer IDs are anonymized. Timing, sizes, image identities and outcomes are retained."
+}
