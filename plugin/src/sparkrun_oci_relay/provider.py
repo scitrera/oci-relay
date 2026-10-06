@@ -357,6 +357,9 @@ class RelayProvider:
         heartbeat_stop = threading.Event()
         source_process = None
         try:
+            if pin:
+                progress.phase("checking registry pin metadata storage")
+                parallel(request.targets, lambda host: pins.preflight(runner, host, request.image))
             execution_hosts = list(dict.fromkeys([request.source_host, *request.targets]))
             architectures = parallel(execution_hosts, runner.architecture)
             # Acquire/verify each architecture once. Concurrent extraction into
@@ -641,17 +644,27 @@ class RelayProvider:
                     "discovery_complete", "discovery_stop_reason", "discovery_stale", "cache_probe_seconds", "cache_probe_limited",
                 )} for identity, observation in outcomes.items()
             })
-            logger.info("OCI Relay completed: %s", final.get("metrics", {}))
+            logger.info("OCI Relay transfer metrics: %s", final.get("metrics", {}))
             if "registry_metrics" in final:
                 progress.event({"registry_metrics": final["registry_metrics"]})
                 logger.info("OCI Relay registry: %s", final["registry_metrics"])
             mark("transfer_import")
-            completed = all(value in {"complete", "already_present"} for value in result.values())
-            if pin:
-                if completed:
+            receivers_complete = all(value in {"complete", "already_present"} for value in result.values())
+            if pin and receivers_complete:
+                progress.phase("saving verified registry pin records")
+                try:
                     parallel(request.targets, lambda host: pins.record(
                         runner, host, request.image, runtime_images[host], ready["config_digest"],
                     ))
+                except OperationError as error:
+                    raise OperationError(
+                        "images imported and verified, but saving registry pin records failed; "
+                        "restore cache storage and retry (installed images can be reused): " + str(error)
+                    ) from error
+            # Metadata publication is required for durable pinned-image reuse.
+            # Do not let cleanup print success when publication raised above.
+            completed = receivers_complete
+            if pin:
                 return ImageCopyResult(result, errors, runtime_images=runtime_images)
             return ImageCopyResult(result, errors)
         finally:

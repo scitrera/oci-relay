@@ -221,6 +221,14 @@ A forced pull re-verifies the registry source; offline mode rejects forced pulls
 Deleting receipts loses the upstream binding for images that Docker cannot
 inspect by their original pin; an online relay operation can recreate it.
 
+Before a pinned transfer starts, the plugin checks that each receiver can write
+pin metadata. This is a writability check, not a disk reservation: Docker import
+can still exhaust space afterward. A failed final receipt write reports failure
+instead of a misleading completion message, identifies that the images were
+already verified, and advises retrying after restoring cache storage. On retry,
+the registry pin is re-verified and an intact installed image can be reused
+without downloading its layers again.
+
 The engine remains compatible with the v0.1.0 binaries. The plugin requires
 Sparkrun's image-runtime API 1 for this handoff and reports an explicit
 compatibility error on older hosts instead of silently dropping the digest.

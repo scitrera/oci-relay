@@ -469,3 +469,64 @@ def test_corrupt_registry_pin_never_transfers_or_falls_back(tmp_path, monkeypatc
     finally:
         session.close()
         fixture.close()
+
+
+@pytest.mark.parametrize('failure_phase', ['preflight', 'record'])
+def test_pin_metadata_failure_is_not_reported_complete_and_retry_reuses_import(tmp_path, monkeypatch, caplog, failure_phase):
+    from types import SimpleNamespace
+    from sparkrun.plugins import ImagePullRequest
+    from sparkrun.transports.session import SshHostSession
+    from sparkrun_oci_relay import pins
+    from sparkrun_oci_relay.host import OperationError, Runner
+    from sparkrun_oci_relay.provider import RelayProvider
+    from sparkrun_oci_relay.progress import PROGRESS
+
+    fixture = RegistryFixture(layer_count=1)
+    image = fixture.image + '@' + digest(fixture.manifest)
+    config_file = tmp_path / 'config.json'
+    config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
+    settings = dict(development_binary=os.environ['OCI_RELAY_BINARY'], remote_cache_dir=str(tmp_path / 'cache'),
+                    registry_config=str(config_file), registry_plain_http=True, transport='http2-direct', max_buffer_bytes=8 << 20)
+    starts = []
+    original_start = Runner.start_source
+    def start(*args, **kwargs):
+        starts.append(True)
+        return original_start(*args, **kwargs)
+    monkeypatch.setattr(Runner, 'start_source', start)
+    original = getattr(pins, failure_phase)
+    def disk_full(*args, **kwargs):
+        raise OperationError('localhost: No space left on device')
+    monkeypatch.setattr(pins, failure_phase, disk_full)
+    session = SshHostSession()
+    request = ImagePullRequest(image=image, source_host=None, targets=('localhost',), transfer_hosts=('127.0.0.1',),
+                               timeout=90, session=session, config=SimpleNamespace(plugin_settings=lambda _: settings))
+    caplog.set_level(PROGRESS)
+    try:
+        with pytest.raises(OperationError, match='No space left on device') as error:
+            RelayProvider().pull(request)
+        assert 'OCI Relay: failed in' in caplog.text
+        assert 'OCI Relay: complete in' not in caplog.text
+        assert not list((tmp_path / 'cache' / 'pins').glob('*.json'))
+        if failure_phase == 'preflight':
+            assert not starts and not fixture.downloads
+        else:
+            assert starts and fixture.descriptors[0]['digest'] in fixture.downloads
+            assert 'images imported and verified' in str(error.value)
+            actual = subprocess.check_output(['docker', 'image', 'inspect', '--format={{.Id}}', pins.retention_tag(image)], text=True).strip()
+            assert actual == fixture.config_id
+        monkeypatch.setattr(pins, failure_phase, original)
+        fixture.downloads.clear()
+        caplog.clear()
+        result = RelayProvider().pull(request)
+        assert not result.errors and result.runtime_images == {'localhost': fixture.config_id}
+        assert 'OCI Relay: complete in' in caplog.text
+        if failure_phase == 'record':
+            assert result.outcomes == {'localhost': 'already_present'}
+            assert fixture.descriptors[0]['digest'] not in fixture.downloads
+        receipts = list((tmp_path / 'cache' / 'pins').glob('*.json'))
+        assert len(receipts) == 1 and json.loads(receipts[0].read_text())['runtime_image'] == fixture.config_id
+        assert not list((tmp_path / 'cache' / 'pins').glob('.preflight.*'))
+    finally:
+        session.close()
+        fixture.close()
+        subprocess.run(['docker', 'image', 'rm', pins.retention_tag(image)], capture_output=True)

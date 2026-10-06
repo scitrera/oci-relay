@@ -96,3 +96,16 @@ def record(runner, host, image, runtime_image, config_digest):
         runner.execute(host, ["sh", "-c", script], input_data=json.dumps(receipt).encode())
     finally:
         runner.connection(host).execute(host or "localhost", ["rm", "-f", "--", temporary], timeout=10)
+
+
+def preflight(runner, host, image):
+    """Check metadata storage before payload work; this does not reserve disk."""
+    directory = _path(runner, host, image).rsplit("/", 1)[0]
+    temporary = directory + "/.preflight." + uuid.uuid4().hex
+    script = "umask 077; mkdir -p -- " + shlex.quote(directory) + " && cat > " + shlex.quote(temporary)
+    try:
+        runner.execute(host, ["sh", "-c", script], input_data=b"\0" * 4096)
+    except OperationError as error:
+        raise OperationError(f"{host}: registry pin cache is not writable before transfer: {error}") from error
+    finally:
+        runner.connection(host).execute(host or "localhost", ["rm", "-f", "--", temporary], timeout=10)
