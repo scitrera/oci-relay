@@ -113,3 +113,30 @@ def test_heartbeat_during_silent_preparation(caplog):
         p.close(False, False)
         logger.removeHandler(handler)
     assert not p.thread.is_alive()
+
+
+def test_routine_receiver_and_registry_updates_wait_thirty_seconds(monkeypatch, caplog):
+    from sparkrun_oci_relay import progress
+
+    caplog.set_level(PROGRESS)
+    now = [100.0]
+    monkeypatch.setattr(progress.time, 'monotonic', lambda: now[0])
+    p = Progress('fixture:latest')
+    p.bind({'receiver-0': 'spark-a'})
+    try:
+        update = event()
+        update['registry_metrics'] = {'upstream_blob_bytes': 4 << 20}
+        p.event(update)
+        count = len(caplog.records)
+        now[0] += 29
+        update = dict(event(2), registry_metrics={'upstream_blob_bytes': 4 << 20})
+        p.event(update)
+        assert len(caplog.records) == count
+        now[0] += 1
+        update = dict(event(3), registry_metrics={'upstream_blob_bytes': 4 << 20})
+        p.event(update)
+        assert len(caplog.records) == count + 2
+        p.event(event(4, 'verifying'))
+        assert 'verifying image' in caplog.records[-1].getMessage()
+    finally:
+        p.close(False, False)

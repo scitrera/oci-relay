@@ -104,13 +104,19 @@ class RegistryFixture:
 
 
 @pytest.mark.parametrize('transport', ['http2-direct', 'http2-ssh', 'ssh-stdio'])
-def test_registry_progress_visible_during_transfer(tmp_path, transport, caplog):
+def test_registry_progress_visible_during_transfer(tmp_path, transport, caplog, monkeypatch):
     from types import SimpleNamespace
 
     from sparkrun.core.progress import PROGRESS
     from sparkrun.plugins import ImagePullRequest
     from sparkrun.transports.session import SshHostSession
     from sparkrun_oci_relay.provider import RelayProvider
+    from sparkrun_oci_relay import provider
+    from sparkrun_oci_relay.progress import Progress
+
+    # Exercise live transport events without turning the default 30s display
+    # cadence into a long-running integration fixture. Cadence has clock tests.
+    monkeypatch.setattr(provider, 'Progress', lambda image: Progress(image, interval=1))
 
     fixture = RegistryFixture(size=1 << 20, layer_count=1, chunk_delay=0.25)
     config_file = tmp_path / 'docker-config.json'
@@ -148,7 +154,8 @@ def test_registry_progress_visible_during_transfer(tmp_path, transport, caplog):
 
 
 @pytest.mark.parametrize('transport', ['http2-direct', 'http2-ssh', 'ssh-stdio'])
-def test_registry_core_hook_import_reuse_and_warm_skip(tmp_path, monkeypatch, transport, caplog):
+@pytest.mark.parametrize('latest_refresh', [False, True])
+def test_registry_core_hook_import_reuse_and_warm_skip(tmp_path, monkeypatch, transport, caplog, latest_refresh):
     from sparkrun.core import image_distribution as api
     from sparkrun.core.progress import PROGRESS
     from sparkrun.containers import distribute
@@ -157,6 +164,8 @@ def test_registry_core_hook_import_reuse_and_warm_skip(tmp_path, monkeypatch, tr
 
     caplog.set_level(PROGRESS)
     fixture = RegistryFixture()
+    if latest_refresh:
+        fixture.image = fixture.image.removesuffix(':test') + ':latest'
     config_file = tmp_path / 'docker-config.json'
     config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
     settings = {
@@ -181,7 +190,8 @@ def test_registry_core_hook_import_reuse_and_warm_skip(tmp_path, monkeypatch, tr
             if previous != fixture.config_id:
                 old_ids.append(previous)
             fixture.downloads.clear()
-            assert distribute.distribute_image_from_local(fixture.image, ['localhost'], transfer_hosts=['127.0.0.1'], force_pull=count == 2, timeout=90) == []
+            assert distribute.distribute_image_from_local(fixture.image, ['localhost'], transfer_hosts=['127.0.0.1'],
+                                                          force_pull=count == 2 and not latest_refresh, timeout=90) == []
             observed = subprocess.check_output(['docker', 'image', 'inspect', '--format={{.Id}}', fixture.image], text=True).strip()
             assert observed == fixture.config_id
             # The native helper already pins the previous image. It must not
@@ -208,6 +218,47 @@ def test_registry_core_hook_import_reuse_and_warm_skip(tmp_path, monkeypatch, tr
         subprocess.run(['docker', 'image', 'rm', fixture.image], capture_output=True)
         for image_id in old_ids:
             subprocess.run(['docker', 'image', 'rm', image_id], capture_output=True)
+
+
+def test_latest_metadata_failure_reuses_local_image_without_builtin_pull(tmp_path, monkeypatch, caplog):
+    from sparkrun.core import image_distribution as api
+    from sparkrun.containers import distribute
+    from sparkrun_oci_relay.provider import RelayProvider
+    from sparkrun_oci_relay.progress import PROGRESS
+
+    caplog.set_level(PROGRESS)
+    fixture = RegistryFixture(layer_count=1)
+    fixture.image = fixture.image.removesuffix(':test') + ':latest'
+    config_file = tmp_path / 'docker-config.json'
+    config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
+    settings = {
+        'development_binary': os.environ['OCI_RELAY_BINARY'], 'remote_cache_dir': str(tmp_path / 'binaries'),
+        'registry_plain_http': True, 'registry_config': str(config_file), 'max_buffer_bytes': 8 << 20,
+    }
+    class Config(dict):
+        def plugin_settings(self, name):
+            return settings
+    token = api._CONFIG.set(Config(container_distribution_provider='oci-relay'))
+    monkeypatch.setattr(api, '_PROVIDERS', {'oci-relay': RelayProvider()})
+    monkeypatch.setattr(distribute, 'ensure_image', lambda *a, **k: pytest.fail('builtin source pull was called'))
+    try:
+        assert distribute.distribute_image_from_local(fixture.image, ['localhost'], transfer_hosts=['127.0.0.1'], timeout=90) == []
+        fixture.downloads.clear()
+        caplog.clear()
+        # Lose registry access after caching latest. No receiver starts during
+        # the failed metadata resolution; the original local identity is safe.
+        config_file.write_text('{}')
+        assert distribute.distribute_image_from_local(fixture.image, ['localhost'], transfer_hosts=['127.0.0.1'], timeout=90) == []
+        observed = json.loads(subprocess.check_output(['docker', 'image', 'inspect', fixture.image]))[0]
+        assert observed['Id'] == fixture.config_id
+        assert observed['RootFS']['Layers'] == fixture.diff_ids
+        assert not fixture.downloads
+        assert 'using cached image' in caplog.text
+        assert 'registry refresh unavailable before transfer' in caplog.text
+    finally:
+        api._CONFIG.reset(token)
+        fixture.close()
+        subprocess.run(['docker', 'image', 'rm', fixture.image], capture_output=True)
 
 
 @pytest.mark.parametrize('transport', ['http2-direct', 'ssh-stdio'])

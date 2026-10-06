@@ -113,7 +113,7 @@ def test_provider_passes_defaults_to_execution_without_mutation(monkeypatch):
     request = SimpleNamespace(config=SimpleNamespace(plugin_settings=lambda _: original), dry_run=False, timeout=30)
     provider = RelayProvider()
     observed = []
-    def copy(request, settings, timeout):
+    def copy(request, settings, timeout, *, source_image=None):
         observed.append(settings)
         return api.ImageCopyResult({})
     monkeypatch.setattr(provider, '_copy', copy)

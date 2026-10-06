@@ -41,6 +41,20 @@ Mac controllers coordinate delegated transfers without executing a local relay.
 
 ## Real multi-host qualification
 
+### Controller latest-refresh regression
+
+After v0.1.0, plugin regression tests cover an already-present controller image
+with a mutable `:latest` tag. Unforced refreshes use the registry relay before
+any builtin Docker pull: a changed image downloads only the newly needed layer,
+and the next unchanged refresh downloads no layers. These tests run through the
+actual Sparkrun pre-pull hook on all three transports, using the published
+v0.1.0 engine. Metadata/auth failure before receiver startup reuses the pinned
+cached local image; explicit/forced pulls and started-transfer failures cannot
+take that fallback. Clock-controlled tests verify the 30-second progress cadence.
+The complete plugin suite passed 197 tests, including real Docker fixtures.
+
+### Initial cluster qualification
+
 Authorized Sparkrun cluster `benchmark-cluster`: source `host-a`, receivers
 `host-b`, `host-c`, `host-d`. Linux arm64, Docker 29.2.1,
 classic overlay2. Each run created a fresh incompressible 32 MiB payload,

@@ -8,8 +8,9 @@ SPDX-FileComment: The Sparkrun additional permission in LICENSE_EXCEPTION applie
 
 The plugin handles local-image copies and can overlap registry downloads with
 multi-host distribution through the pre-pull hook. With `source_mode: auto`, a
-missing source image or explicit fresh pull uses the registry directly; existing
-local images retain core's source/refresh policy. Core retains build/offline,
+missing source image, explicit fresh pull, or controller-local `:latest` refresh
+uses the registry directly. Existing versioned/local-build images and unforced
+delegated sources retain core's local-image policy. Core retains build/offline,
 Coldsnap materialization and launch ordering. Explicit per-node pull mode and
 local-only ensure operations retain builtin behavior. See
 [registry sources](registry-source.md) for selection, authentication and cache limits.
@@ -171,7 +172,7 @@ reports that it cannot support a request before destination transfer starts.
 The Sparkrun plugin shows image-transfer status at default verbosity, using
 Sparkrun's `PROGRESS` logging level. It reports preparation, cache discovery,
 per-host received layer bytes and throughput, known reused layers, Docker import,
-verification, and cleanup. Byte updates are limited to about once every five
+verification, and cleanup. Byte updates are limited to about once every 30
 seconds per host; observed phase changes appear immediately. Quiet preparation
 steps emit a heartbeat after 30 seconds. Registry download bytes are displayed
 separately from bytes sent to receivers. Detailed metrics remain available at

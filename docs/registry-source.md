@@ -37,11 +37,29 @@ before transfer. A started operation's partial failure raises
 selecting another mutable-tag identity.
 
 The relay plugin's default `source_mode: auto` uses registry sourcing when the
-fetcher has no local copy or a fresh pull is explicitly requested. An existing
-local image keeps the established core path, including best-effort `:latest`
-refresh and its fallback behavior. Explicit local source modes and supplied
-manifests retain their meaning. Offline mode never contacts the registry.
+fetcher has no local copy, a fresh pull is explicitly requested, or Sparkrun
+would refresh a controller-local pullable `:latest`/untagged image. That refresh
+does not first download and import the image into the controller's Docker
+store: OCI Relay resolves the manifest and streams needed layers directly to
+the receivers, with status from source selection onward.
+
+Existing versioned tags and local-build names retain core's local-image path.
+Delegated sources also keep their existing local copy unless a fresh pull is
+requested. Explicit local source modes and supplied manifests retain their
+meaning. Offline mode never contacts the registry.
 `source_mode: registry` explicitly chooses the registry when online.
+
+A best-effort controller `:latest` refresh may reuse the original cached image
+if registry metadata preparation fails **before any receiver starts**. The
+fallback pins the inspected Docker image ID, reports the reason, and shares the
+original operation deadline. Failures after source readiness, including partial
+transfers and corrupt payloads, do not switch to an older image. Forced pulls,
+explicit registry mode, and missing source images never use this cached fallback.
+
+Routine receiver and registry byte updates use a 30-second cadence; phase
+changes and completion remain immediate, with a 30-second heartbeat during
+silent work. Explicit builtin Docker pulls also announce their start and emit
+Sparkrun's normal 30-second heartbeat.
 
 In controller distribution, only the requested targets import the image; the
 controller acts as a fetcher without a Docker import. In delegated distribution,
