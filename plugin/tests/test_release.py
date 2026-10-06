@@ -35,10 +35,17 @@ def test_explicit_binary_requires_trusted_hash_and_architecture(tmp_path):
         release.verify_elf(path, "arm64")
 
 
-def test_offline_has_no_network_without_trusted_cache(monkeypatch):
+@pytest.mark.parametrize("pinned", [False, True])
+def test_offline_has_no_network_without_trusted_cache(tmp_path, monkeypatch, pinned):
     monkeypatch.setattr(release.urllib.request, "urlopen", lambda *a, **k: pytest.fail("network used"))
-    with pytest.raises(release.BinaryUnavailable, match="no trusted release"):
-        release.acquire("arm64", {}, offline=True)
+    monkeypatch.setattr(release, "__file__", str(tmp_path / "release.py"))
+    metadata = {release.__version__: {"linux/arm64": {
+        "url": "https://example.invalid/release.tar.gz", "sha256": "a" * 64,
+    }}} if pinned else {}
+    (tmp_path / "releases.json").write_text(json.dumps(metadata))
+    message = "offline mode requires" if pinned else "no trusted release"
+    with pytest.raises(release.BinaryUnavailable, match=message):
+        release.acquire("arm64", {"cache_dir": str(tmp_path / "empty-cache")}, offline=True)
 
 
 @pytest.mark.parametrize("symlink", [False, True])
