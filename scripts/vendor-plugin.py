@@ -122,8 +122,8 @@ if not args.development:
     releases = json.loads(files["releases.json"])
     if dirty or ancestry.returncode or engine_changed.returncode or not revision:
         raise SystemExit("Production vendoring requires a clean commit containing the matching unchanged engine release; use --development for a worktree")
-    if set(releases.get(version, {})) != {"linux/amd64", "linux/arm64"}:
-        raise SystemExit("Release checksums must be pinned for both architectures")
+    if set(releases.get(version, {})) != {"linux/amd64", "linux/arm64", "darwin/arm64"}:
+        raise SystemExit("Release checksums must be pinned for all three platforms")
 hashes = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}
 content_hash = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
 lock = (

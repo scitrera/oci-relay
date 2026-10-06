@@ -17,8 +17,8 @@ resource limits, and reports progress.
 - Use multiple TCP data paths with bounded memory and concurrency.
 
 Native access supports qualified rootful Linux Docker 29+ stores. Real-engine
-qualification currently covers Linux arm64; Linux amd64 binaries are
-cross-built. See [storage compatibility](docs/storage-compatibility.md) and
+qualification currently covers Linux arm64; Linux amd64 and macOS arm64 binaries
+are cross-built. See [platform support](docs/platforms.md), [storage compatibility](docs/storage-compatibility.md) and
 [validation](docs/validation.md). Published binaries are available from [GitHub releases](https://github.com/scitrera/oci-relay/releases).
 
 ## Quick start with Sparkrun

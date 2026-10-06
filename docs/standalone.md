@@ -8,6 +8,8 @@ SPDX-FileComment: The Sparkrun additional permission in LICENSE_EXCEPTION applie
 
 The plugin is the multi-host coordinator. The executable exposes composable
 commands; there is no standalone SSH `send` command yet.
+See [platform support](platforms.md) for macOS source configuration and the
+distinction between a controller and an execution host.
 
 ```sh
 oci-relay version

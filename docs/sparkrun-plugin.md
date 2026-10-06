@@ -53,6 +53,11 @@ one registration path and do not enable installed and bundled copies together.
 
 ## Binary distribution
 
+Execution hosts currently require Linux amd64/arm64. A Mac controller can
+coordinate delegated execution on Linux cluster nodes without running a relay
+locally; see [platforms and controller placement](platforms.md). The standalone
+macOS arm64 archive does not yet enable a controller-local plugin source.
+
 For a locally supplied production binary, configure `binary_paths` and
 `binary_sha256` maps keyed by `amd64`/`arm64`. The controller verifies the ELF
 architecture and hash, stages it to each execution host, verifies the remote

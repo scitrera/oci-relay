@@ -11,10 +11,11 @@ do not edit generated workflow YAML independently.
    Docker store/architecture and route, recording evidence in validation.md.
    Inspect cancellation, failed receivers, cleanup and large-upload rejection.
 3. Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE, LICENSE_EXCEPTION,
-   COPYRIGHT and dependency notices are included in both binary archives.
+   COPYRIGHT and dependency notices are included in every binary archive.
    Verify plugin wheels and vendored copies contain the AGPL license/exception.
 4. Review and commit the source and generated CI, then push to the public repository. A matching `vVERSION` tag triggers Linux amd64/arm64 archive builds plus
-   `checksums.txt`. Local generation does not create or push that tag.
+   `checksums.txt`, plus the macOS arm64 archive. Local generation does not
+   create or push that tag. See [platform qualification](platforms.md).
 5. Publish release-matched corresponding source alongside binaries. The Git tag
    must include all source, module pins, CLI/plugin code, versions.yaml and build
    scripts. For a self-contained source bundle, run `go mod vendor` in a clean
@@ -28,7 +29,8 @@ do not edit generated workflow YAML independently.
    {
      "VERSION": {
        "linux/amd64": {"url": "https://github.com/OWNER/REPO/releases/download/vVERSION/oci-relay_VERSION_linux_amd64.tar.gz", "sha256": "ACTUAL_ARCHIVE_SHA256"},
-       "linux/arm64": {"url": "https://github.com/OWNER/REPO/releases/download/vVERSION/oci-relay_VERSION_linux_arm64.tar.gz", "sha256": "ACTUAL_ARCHIVE_SHA256"}
+       "linux/arm64": {"url": "https://github.com/OWNER/REPO/releases/download/vVERSION/oci-relay_VERSION_linux_arm64.tar.gz", "sha256": "ACTUAL_ARCHIVE_SHA256"},
+       "darwin/arm64": {"url": "https://github.com/OWNER/REPO/releases/download/vVERSION/oci-relay_VERSION_darwin_arm64.tar.gz", "sha256": "ACTUAL_ARCHIVE_SHA256"}
      }
    }
    ```
@@ -54,7 +56,7 @@ do not edit generated workflow YAML independently.
    From Sparkrun, run `python scripts/vendor-oci-relay.py update --latest --initial`
    (omit `--initial` on updates), then `python scripts/vendor-oci-relay.py verify`.
    The script resolves this published descriptor rather than a floating branch,
-   validates host APIs and both archive pins, and verifies engine ancestry.
+   validates host APIs and all archive pins, and verifies engine ancestry.
    It records exact file hashes in `vendor/oci-relay.lock` and imports offline
    contract tests. The bundled `plugins.oci_relay` feature defaults on only for
    alpha. Keep installed and bundled registration mutually exclusive.

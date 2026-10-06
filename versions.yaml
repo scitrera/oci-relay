@@ -36,7 +36,7 @@ ci:
     extra_steps:
       - name: Check redistributed dependency licenses
         run: 'python3 scripts/dependency-licenses.py --check'
-    binary_platforms: [linux/amd64, linux/arm64]
+    binary_platforms: [linux/amd64, linux/arm64, darwin/arm64]
     binaries:
       - name: oci-relay
         project: oci-relay
