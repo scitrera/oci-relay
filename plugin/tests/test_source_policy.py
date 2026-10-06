@@ -110,7 +110,7 @@ def test_provider_passes_defaults_to_execution_without_mutation(monkeypatch):
     from sparkrun_oci_relay.provider import RelayProvider
 
     original = {}
-    request = SimpleNamespace(config=SimpleNamespace(plugin_settings=lambda _: original), dry_run=False, timeout=30)
+    request = SimpleNamespace(image="fixture:tag", config=SimpleNamespace(plugin_settings=lambda _: original), dry_run=False, timeout=30)
     provider = RelayProvider()
     observed = []
     def copy(request, settings, timeout, *, source_image=None):

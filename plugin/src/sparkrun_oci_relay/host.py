@@ -78,13 +78,17 @@ class Runner:
             raise OperationError(f"unsupported execution host platform on {host or 'controller'}")
         return arch
 
-    def stage_binary(self, host, path: Path, digest: str, version: str) -> str:
+    def cache_directory(self, host):
         base = self.settings.get("remote_cache_dir")
         if not base:
             home = self.execute(host, ["sh", "-c", 'printf "%s" "$HOME"']).decode()
             base = home + "/.cache/oci-relay"
         if not isinstance(base, str) or not base.startswith("/") or "\x00" in base:
             raise OperationError("remote_cache_dir must be an absolute path")
+        return base
+
+    def stage_binary(self, host, path: Path, digest: str, version: str) -> str:
+        base = self.cache_directory(host)
         destination = f"{base}/{version}/{digest}/oci-relay"
         # Cache hits need one command after locating the host cache. Execute
         # only after checking the full pinned hash, never just path existence.

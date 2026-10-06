@@ -53,6 +53,25 @@ cached local image; explicit/forced pulls and started-transfer failures cannot
 take that fallback. Clock-controlled tests verify the 30-second progress cadence.
 The complete plugin suite passed 197 tests, including real Docker fixtures.
 
+### Digest-pinned recipe qualification
+
+The adapter and updated Sparkrun `develop-next` support manifest and index pins,
+including `tag@sha256:...`, using the unchanged published v0.1.0 engine. All 224
+plugin tests passed, including real Docker fixture transfers over direct HTTP/2,
+SSH forwarding and SSH stdio. The pin fixtures verify fresh imports, download of
+only a newly added layer, warm/offline reuse, local sourcing from a prior relay
+import, immutable Docker container creation, moved retention tags, deleted
+images and rejection of a corrupt root before receiver startup. No model was
+started and no Docker daemon was reconfigured.
+
+Host regressions cover the full launcher handoff to image probes and per-host
+Docker executors, differing runtime IDs across stores, preserved recipe/job
+identity, content-ID staging, offline preflight, invalid provider results,
+context cleanup, dry runs and rejection of conflicting pull options. The new
+pin-specific real-Docker fixtures use classic overlay2; different store IDs are
+covered by host contract tests and existing engine storage qualification, not a
+new mixed-store multi-host pin benchmark.
+
 ### Initial cluster qualification
 
 Authorized Sparkrun cluster `benchmark-cluster`: source `host-a`, receivers

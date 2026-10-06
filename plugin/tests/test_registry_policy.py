@@ -141,12 +141,72 @@ def test_explicit_registry_and_implicit_latest(monkeypatch):
     assert settings == {'source_mode': 'registry'} and not commands
 
 
-def test_digest_runtime_reference_keeps_builtin_path(monkeypatch):
+@pytest.mark.parametrize('suffix', ['@sha256:', ':canary@sha256:'])
+def test_digest_runtime_reference_uses_exact_registry_pin(monkeypatch, suffix):
+    from sparkrun_oci_relay import provider as module
+    fake_probe(monkeypatch, False)
+    monkeypatch.setattr(module.pins, 'resolve', lambda *a: None)
+    req = replace(request(), image='example.test/image' + suffix + '1' * 64)
+    provider = module.RelayProvider()
+    calls = []
+    monkeypatch.setattr(provider, 'copy', lambda r, **kw: calls.append((r, kw)) or 'copied')
+    assert provider.pull(req) == 'copied'
+    assert calls[0][0].image == req.image
+    assert calls[0][1] == {'registry': True}
+
+
+def test_digest_pin_requires_host_runtime_capability(monkeypatch):
+    import sparkrun.plugins as api
     from sparkrun_oci_relay.provider import RelayProvider
-    commands = fake_probe(monkeypatch, False)
-    req = replace(request(), image='example.test/image@sha256:' + '1' * 64)
-    assert RelayProvider().pull(req) is None
-    assert not commands
+    monkeypatch.delattr(api, 'IMAGE_RUNTIME_API_VERSION')
+    with pytest.raises(api.ImageDistributionUnsupported, match='image-runtime API'):
+        RelayProvider().pull(replace(request(), image='example.test/image@sha256:' + '1' * 64))
+
+
+@pytest.mark.parametrize('offline', [False, True])
+def test_cached_pin_returns_per_host_runtime_ids_without_registry(monkeypatch, offline):
+    from sparkrun_oci_relay import provider as module
+    fake_probe(monkeypatch, False)
+    runtime_id = 'sha256:' + 'a' * 64
+    monkeypatch.setattr(module.pins, 'resolve', lambda *a: runtime_id)
+    provider = module.RelayProvider()
+    monkeypatch.setattr(provider, 'copy', lambda *a, **kw: pytest.fail('warm pin transferred'))
+    req = replace(request(offline=offline), image='example.test/image@sha256:' + '1' * 64)
+    result = provider.pull(req)
+    assert result.outcomes == {'node': 'already_present'}
+    assert result.runtime_images == {'node': runtime_id}
+
+
+def test_partial_offline_pin_uses_verified_receiver_as_source(monkeypatch):
+    from sparkrun_oci_relay import provider as module
+    fake_probe(monkeypatch, False)
+    runtime_id = 'sha256:' + 'a' * 64
+    monkeypatch.setattr(module.pins, 'resolve', lambda runner, host, image: runtime_id if host == 'node' else None)
+    provider = module.RelayProvider()
+    calls = []
+    monkeypatch.setattr(provider, 'copy', lambda r, **kw: calls.append((r, kw)) or 'copied')
+    req = replace(request(offline=True), image='example.test/image@sha256:' + '1' * 64,
+                  targets=('node', 'missing'), transfer_hosts=('node', 'missing'))
+    assert provider.pull(req) == 'copied'
+    assert calls[0][0].source_host == 'node'
+    assert calls[0][1] == {'registry': False}
+
+
+def test_pin_registry_failure_never_uses_mutable_tag(monkeypatch):
+    from sparkrun_oci_relay import provider as module
+    fake_probe(monkeypatch, True)
+    monkeypatch.setattr(module.pins, 'resolve', lambda *a: None)
+    provider = module.RelayProvider()
+    calls = []
+    def copy(r, **kw):
+        calls.append((r, kw))
+        raise module.RegistrySourceUnavailable('unavailable')
+    monkeypatch.setattr(provider, 'copy', copy)
+    req = replace(request(), image='example.test/image:latest@sha256:' + '1' * 64)
+    with pytest.raises(module.RegistrySourceUnavailable):
+        provider.pull(req)
+    assert len(calls) == 1 and calls[0][0].image == req.image
+    assert calls[0][1] == {'registry': True}
 
 
 @pytest.mark.parametrize('settings', [

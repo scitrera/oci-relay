@@ -15,6 +15,13 @@ Coldsnap materialization and launch ordering. Explicit per-node pull mode and
 local-only ensure operations retain builtin behavior. See
 [registry sources](registry-source.md) for selection, authentication and cache limits.
 
+Digest-pinned recipes (`image@sha256:...` or `image:tag@sha256:...`) also use
+OCI Relay, including index pins. Updated `develop-next` hosts expose
+`IMAGE_RUNTIME_API_VERSION = 1`, which lets the plugin pass verified per-host
+Docker IDs to the launcher while preserving the requested recipe pin. Warm
+and offline runs can recover those bindings from private host receipts. See
+[digest-pinned recipes](registry-source.md#digest-pinned-recipes).
+
 Sparkrun `develop-next` can bundle the release adapter using its
 `vendor-oci-relay.py` script. Its `plugins.oci_relay` feature defaults on for
 alpha and off for stable/beta; explicit feature overrides take precedence.

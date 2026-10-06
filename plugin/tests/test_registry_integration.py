@@ -32,6 +32,8 @@ class RegistryFixture:
         self.descriptors = []
         self.diff_ids = []
         self.downloads = []
+        self.manifests = {}
+        self.manifest_requests = []
         self.requests_lock = threading.Lock()
         for number in range(layer_count):
             buffer = io.BytesIO()
@@ -60,7 +62,9 @@ class RegistryFixture:
                     return
                 prefix = '/v2/' + fixture.repository + '/'
                 if self.path.startswith(prefix + 'manifests/'):
-                    data = fixture.manifest
+                    key = self.path[len(prefix + 'manifests/'):]
+                    fixture.manifest_requests.append(key)
+                    data = fixture.manifests.get(key, fixture.manifest)
                 elif self.path.startswith(prefix + 'blobs/'):
                     key = self.path[len(prefix + 'blobs/'):]
                     data = fixture.blobs.get(key)
@@ -308,3 +312,160 @@ def test_registry_reuses_layers_from_multiple_images_after_parent_change(tmp_pat
         fixture.close()
         for tag in reversed(tags):
             subprocess.run(['docker', 'image', 'rm', tag], capture_output=True)
+
+
+@pytest.mark.parametrize('index_pin', [False, True])
+@pytest.mark.parametrize('transport', ['http2-direct', 'http2-ssh', 'ssh-stdio'])
+def test_pinned_registry_to_docker_runtime_and_offline_cache(tmp_path, monkeypatch, caplog, index_pin, transport):
+    """Exact registry identity -> selective import -> runnable immutable ID.
+
+    No workload is started. Docker create validates that launch can use the
+    bound ID even after the registry is unavailable and the retention tag moves.
+    """
+    from sparkrun.containers import distribute
+    from sparkrun.core import image_distribution as api
+    from sparkrun.core.image_preparation import resolve_content_images
+    from sparkrun.orchestration.executors.docker import DockerExecutor
+    from sparkrun_oci_relay import pins
+    from sparkrun_oci_relay.provider import RelayProvider
+    from sparkrun_oci_relay.progress import PROGRESS
+
+    caplog.set_level(PROGRESS)
+    fixture = RegistryFixture()
+    config_file = tmp_path / 'docker-config.json'
+    config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
+    settings = {
+        'development_binary': os.environ['OCI_RELAY_BINARY'], 'remote_cache_dir': str(tmp_path / 'binaries'),
+        'transport': transport, 'registry_plain_http': True, 'registry_config': str(config_file),
+        'registry_cache_bytes': 4 << 20, 'max_buffer_bytes': 8 << 20,
+    }
+    class Config(dict):
+        def plugin_settings(self, name):
+            return settings
+    config = Config(container_distribution_provider='oci-relay')
+    token = api._CONFIG.set(config)
+    monkeypatch.setattr(api, '_PROVIDERS', {'oci-relay': RelayProvider()})
+    monkeypatch.setattr(distribute, 'ensure_image', lambda *a, **k: pytest.fail('builtin source pull was called'))
+    monkeypatch.setattr(distribute, '_check_remote_image_identities', lambda *a, **k: pytest.fail('builtin source check was called'))
+    tags = []
+    runtime_ids = []
+    container = None
+    closed = False
+
+    @api.image_distribution_operation
+    def transfer(config, image, *, offline=False):
+        if transport == 'http2-ssh':
+            assert distribute.distribute_image_from_head(image, ['localhost'], timeout=90, offline=offline) == []
+        else:
+            assert distribute.distribute_image_from_local(image, ['localhost'], transfer_hosts=['127.0.0.1'],
+                                                          timeout=90, offline=offline) == []
+        resolved = api.resolve_distributed_image(image, 'localhost')
+        assert resolved == fixture.config_id
+        assert resolve_content_images([image], ['localhost']) == (resolved,)
+        executor = DockerExecutor()
+        executor.bind_image_references({image: resolved})
+        command = executor.run_cmd(image, command='true')
+        assert '--pull=never' in command and resolved in command and image not in command
+        return resolved
+
+    try:
+        for count in (1, 2):
+            fixture.update(count)
+            leaf_digest = digest(fixture.manifest)
+            fixture.manifests[leaf_digest] = fixture.manifest
+            root = fixture.manifest
+            if index_pin:
+                root = json.dumps({'schemaVersion': 2, 'mediaType': 'application/vnd.oci.image.index.v1+json',
+                                   'manifests': [{'mediaType': 'application/vnd.oci.image.manifest.v1+json',
+                                       'digest': leaf_digest, 'size': len(root),
+                                       'platform': {'os': 'linux', 'architecture': platform.machine().replace('aarch64', 'arm64').replace('x86_64', 'amd64')}}]},
+                                  separators=(',', ':')).encode()
+            root_digest = digest(root)
+            fixture.manifests[root_digest] = root
+            image = fixture.image + '@' + root_digest
+            tags.append(pins.retention_tag(image))
+            fixture.downloads.clear()
+            fixture.manifest_requests.clear()
+            resolved = transfer(config, image)
+            runtime_ids.append(resolved)
+            assert fixture.manifest_requests[0] == root_digest
+            assert 'test' not in fixture.manifest_requests
+            assert [d for d in fixture.downloads if d in {item['digest'] for item in fixture.descriptors}] == [fixture.descriptors[count - 1]['digest']]
+            observed = json.loads(subprocess.check_output(['docker', 'image', 'inspect', resolved]))[0]
+            assert observed['RootFS']['Layers'] == fixture.diff_ids[:count]
+            # Import didn't fabricate an upstream Docker RepoDigest.
+            assert image not in (observed.get('RepoDigests') or [])
+        # A fresh provider instance/process must recover the verified binding.
+        fixture.close()
+        closed = True
+        fixture.downloads.clear()
+        monkeypatch.setattr(api, '_PROVIDERS', {'oci-relay': RelayProvider()})
+        assert transfer(config, image, offline=True) == runtime_ids[-1]
+        assert not fixture.downloads
+        assert 'pinned image already verified' in caplog.text
+        if transport == 'http2-direct':
+            # Exercise local-source preparation using only the receipt: the
+            # upstream pin is absent from Docker and the registry is stopped.
+            from sparkrun.transports.session import SshHostSession
+            session = SshHostSession()
+            try:
+                result = RelayProvider().copy(api.ImageCopyRequest(
+                    image=image, source_host=None, targets=('localhost',), transfer_hosts=('127.0.0.1',),
+                    config=config, session=session, offline=True, timeout=90,
+                ))
+                assert result.outcomes == {'localhost': 'already_present'}
+                assert result.runtime_images == {'localhost': runtime_ids[-1]}
+            finally:
+                session.close()
+        # Move the retention alias to an unrelated earlier image. A pin must
+        # still resolve to its recorded immutable ID and be runnable locally.
+        subprocess.run(['docker', 'tag', runtime_ids[0], tags[-1]], check=True, capture_output=True)
+        assert api.resolve_distributed_image(image, 'localhost') == runtime_ids[-1]
+        container = subprocess.check_output(['docker', 'create', '--pull=never', '--entrypoint', '/fixture-command',
+                                             runtime_ids[-1]], text=True).strip()
+        assert subprocess.check_output(['docker', 'inspect', '--format={{.Image}}', container], text=True).strip() == runtime_ids[-1]
+        # Removing the immutable image invalidates its receipt even if another
+        # image now occupies the retention tag. Never run that replacement.
+        subprocess.run(['docker', 'rm', container], check=True, capture_output=True)
+        container = None
+        subprocess.run(['docker', 'image', 'rm', runtime_ids[-1]], check=True, capture_output=True)
+        assert api.resolve_distributed_image(image, 'localhost') == image
+        with pytest.raises(api.ImageDistributionFailed, match='not resident'):
+            transfer(config, image, offline=True)
+    finally:
+        api._CONFIG.reset(token)
+        if not closed:
+            fixture.close()
+        if container:
+            subprocess.run(['docker', 'rm', '-f', container], capture_output=True)
+        for tag in tags:
+            subprocess.run(['docker', 'image', 'rm', tag], capture_output=True)
+        for image_id in runtime_ids:
+            subprocess.run(['docker', 'image', 'rm', image_id], capture_output=True)
+
+
+def test_corrupt_registry_pin_never_transfers_or_falls_back(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from sparkrun.plugins import ImagePullRequest
+    from sparkrun.transports.session import SshHostSession
+    from sparkrun_oci_relay.host import OperationError, Runner
+    from sparkrun_oci_relay.provider import RelayProvider
+
+    fixture = RegistryFixture(layer_count=1)
+    config_file = tmp_path / 'docker-config.json'
+    config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
+    settings = dict(development_binary=os.environ['OCI_RELAY_BINARY'], remote_cache_dir=str(tmp_path / 'binaries'),
+                    registry_config=str(config_file), registry_plain_http=True, transport='http2-direct')
+    monkeypatch.setattr(Runner, 'start_receiver', lambda *a, **k: pytest.fail('invalid pin reached receiver'))
+    session = SshHostSession()
+    try:
+        request = ImagePullRequest(image=fixture.image + '@sha256:' + '0' * 64, source_host=None,
+                                   targets=('localhost',), transfer_hosts=('127.0.0.1',), timeout=90, session=session,
+                                   config=SimpleNamespace(plugin_settings=lambda _: settings))
+        with pytest.raises(OperationError):
+            RelayProvider().pull(request)
+        assert not fixture.downloads
+        assert not list((tmp_path / 'binaries' / 'pins').glob('*.json'))
+    finally:
+        session.close()
+        fixture.close()

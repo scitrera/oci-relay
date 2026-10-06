@@ -18,7 +18,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from . import __version__
+from . import __version__, pins
 from .host import Lines, OperationError, Runner, pump
 from .parallel import parallel
 from .paths import arguments as path_arguments, qualify as qualify_paths
@@ -138,6 +138,8 @@ def _source_address(request, settings, facts):
 
 
 class RelayProvider:
+    supports_offline_pull = True
+
     def __init__(self):
         # Serialize image groups for now: a new group cannot multiply the host budgets.
         self._operations = threading.Lock()
@@ -150,24 +152,87 @@ class RelayProvider:
             return SparkrunConfig().plugin_settings("oci-relay")
         return request.config.plugin_settings("oci-relay")
 
+    @staticmethod
+    def _require_pin_api():
+        import sparkrun.plugins as api
+
+        if getattr(api, "IMAGE_RUNTIME_API_VERSION", None) != 1:
+            raise api.ImageDistributionUnsupported(
+                "digest-pinned relay imports require Sparkrun develop-next with image-runtime API 1"
+            )
+
+    def local_image(self, request):
+        if pins.digest(request.image) is None:
+            return None
+        runner = Runner(request.session, self._settings(request))
+        try:
+            return pins.resolve(runner, request.source_host, request.image)
+        finally:
+            runner.close()
+
+    def _pull_pinned(self, request, settings):
+        from sparkrun.plugins import ImageCopyResult, ImageDistributionUnsupported
+        from sparkrun.core.progress import progress_heartbeat
+
+        self._require_pin_api()
+        pins.digest(request.image)
+        settings = validate(settings)
+        started = time.monotonic()
+        timeout = request.timeout or settings.get("timeout_seconds", 3600)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 86400:
+            raise ValueError("relay timeout must be between 1 and 86400 seconds")
+        registry = (not request.offline and settings.get("source_mode", "auto") in {"auto", "registry"}
+                    and (settings.get("registry_source", True) or settings.get("source_mode") == "registry")
+                    and not settings.get("manifest"))
+        if request.offline and request.force_pull:
+            raise OperationError("offline mode cannot fetch a fresh pinned image")
+        if request.dry_run:
+            return self.copy(request, registry=registry)
+        logger.log(PROGRESS, "OCI Relay: checking verified registry pin on receivers: %s", request.image)
+        runner = Runner(request.session, settings)
+        with progress_heartbeat(logger, "OCI Relay: checking verified registry pin"):
+            try:
+                present = {} if request.force_pull else parallel(
+                    request.targets, lambda host: pins.resolve(runner, host, request.image),
+                )
+                if time.monotonic() - started >= timeout:
+                    raise OperationError("pinned cache checks exceeded operation deadline")
+                if present and all(present.values()):
+                    logger.log(PROGRESS, "OCI Relay: pinned image already verified on all %d receiver(s); no transfer", len(present))
+                    return ImageCopyResult(dict.fromkeys(request.targets, "already_present"), runtime_images=present)
+                if not registry:
+                    # Offline/local mode can reuse a verified pin on a receiver,
+                    # including imports whose Docker store lacks the RepoDigest.
+                    source_host = request.source_host
+                    source_id = pins.resolve(runner, source_host, request.image)
+                    if source_id is None:
+                        source_host = next((host for host, value in present.items() if value), None)
+                        source_id = present.get(source_host)
+                    if source_id is None:
+                        raise ImageDistributionUnsupported("pinned image is not resident on an available relay source")
+                    request = replace(request, source_host=source_host)
+            finally:
+                runner.close()
+        if registry:
+            logger.log(PROGRESS, "OCI Relay: fetching exact registry pin and distributing directly to receivers: %s", request.image)
+        remaining = timeout - (time.monotonic() - started)
+        if remaining < 1:
+            raise OperationError("pinned source selection exceeded operation deadline")
+        return self.copy(replace(request, timeout=remaining), registry=registry)
+
     def pull(self, request):
         """Own registry pulls and controller latest refreshes before Docker imports."""
-        from sparkrun.plugins import ImageDistributionUnsupported
         from sparkrun.utils.images import is_pullable_image_ref, parse_image_ref
         from .source_policy import LOCAL_DOCKER
 
         settings = self._settings(request)
+        if pins.digest(request.image):
+            return self._pull_pinned(request, settings)
         if request.offline or (settings.get("registry_source", True) is False and settings.get("source_mode") != "registry"):
             return None
         if settings.get("source_mode", "auto") not in {"auto", "registry"} or settings.get("manifest"):
             return None
         ref = parse_image_ref(request.image)
-        # Docker cannot attach an upstream RepoDigest through its tag API. Keep
-        # digest-named runtime references on core's existing pull path for now.
-        if ref.digest:
-            if settings.get("source_mode") == "registry":
-                raise ImageDistributionUnsupported("registry plugin currently requires a tag; standalone registry sources accept digests")
-            return None
         started = time.monotonic()
         timeout = request.timeout or settings.get("timeout_seconds", 3600)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 86400:
@@ -219,6 +284,11 @@ class RelayProvider:
         from sparkrun.plugins import ImageCopyResult, ImageDistributionUnsupported
 
         settings = self._settings(request)
+        pin = pins.digest(request.image)
+        if pin:
+            self._require_pin_api()
+            if request.offline and settings.get("source_mode") == "registry":
+                settings = dict(settings, source_mode="auto")
         if registry:
             settings = dict(settings, source_mode="registry")
         if settings.get("source_mode") == "registry" and request.offline:
@@ -246,6 +316,13 @@ class RelayProvider:
             remaining = timeout - (time.monotonic() - started)
             if remaining < 1:
                 raise OperationError("image-copy deadline expired before admission")
+            if pin and settings.get("source_mode") != "registry":
+                source_image = self.local_image(request)
+                if source_image is None:
+                    raise ImageDistributionUnsupported("no verified local source for registry pin")
+                remaining = timeout - (time.monotonic() - started)
+                if remaining < 1:
+                    raise OperationError("pinned source checks exceeded operation deadline")
             return self._copy(request, settings, int(remaining), source_image=source_image)
         except (BinaryUnavailable, SourceUnavailable) as error:
             raise ImageDistributionUnsupported(str(error)) from error
@@ -268,6 +345,8 @@ class RelayProvider:
         completed = False
         progress = Progress(request.image)
         source_image = source_image or request.image
+        pin = pins.digest(request.image)
+        destination = pins.retention_tag(request.image) if pin else request.image
 
         def mark(name):
             nonlocal phase_start
@@ -488,13 +567,13 @@ class RelayProvider:
                 arguments = [
                     binaries[host], "peer", *(path_arguments(ready_paths[identity], parts.port)
                         if identity in ready_paths else ["--endpoint", peer_endpoint]), "--session", target_files[identity],
-                    "--tag", request.image, "--replace-tag", "--max-buffer-bytes", str(peer_limits["max_buffer_bytes"]),
+                    "--tag", destination, "--replace-tag", "--max-buffer-bytes", str(peer_limits["max_buffer_bytes"]),
                     "--max-source-streams", str(peer_limits["source_streams"]),
                     "--import", settings.get("receiver_import", "pull"),
                     "--max-import-bytes", str(settings.get("max_import_bytes", 0)),
                     "--timeout-seconds", str(max(1, int(deadline - time.monotonic()))),
                 ]
-                if selection.mode == "registry":
+                if selection.mode == "registry" or pin:
                     arguments.append("--skip-present")
                 if route == "ssh-stdio":
                     arguments.append("--stdio")
@@ -523,11 +602,14 @@ class RelayProvider:
                 final = source_events.event(deadline, check_peers)
             if final.get("type") != "result" or final.get("version") != 1 or final.get("transfer") != ready["transfer"]:
                 raise OperationError("source returned an invalid final result")
+            if pin and selection.mode == "registry" and final.get("registry_root_digest") != pin:
+                raise OperationError("registry source did not verify the requested root digest")
             outcomes = final.get("receivers", {})
             if set(outcomes) != set(ids):
                 raise OperationError("source did not report every required receiver")
             result = {}
             errors = {}
+            runtime_images = {}
             for identity, host in ids.items():
                 observation = outcomes[identity]
                 if observation.get("cleanup_error"):
@@ -536,10 +618,14 @@ class RelayProvider:
                 valid = (
                     code == 0 and observation.get("state") == "COMPLETE"
                     and observation.get("manifest_digest") == ready["manifest_digest"]
-                    and observation.get("tag") == request.image and observation.get("image_id")
+                    and observation.get("tag") == destination and observation.get("image_id")
                     and observation.get("image_id") == ready.get("config_digest", observation.get("image_id"))
+                    and (not pin or (pins.valid_id(observation.get("docker_image_id"))
+                                     and pins.valid_id(ready.get("config_digest"))))
                 )
                 result[host] = ("already_present" if observation.get("already_present") else "complete") if valid else "failed"
+                if valid and pin:
+                    runtime_images[host] = observation["docker_image_id"]
                 progress.outcome(identity, observation, valid)
                 if not valid:
                     errors[host] = observation.get("error") or "\n".join(peer_diagnostics[identity].tail)[-2000:] or "receiver failed"
@@ -561,6 +647,12 @@ class RelayProvider:
                 logger.info("OCI Relay registry: %s", final["registry_metrics"])
             mark("transfer_import")
             completed = all(value in {"complete", "already_present"} for value in result.values())
+            if pin:
+                if completed:
+                    parallel(request.targets, lambda host: pins.record(
+                        runner, host, request.image, runtime_images[host], ready["config_digest"],
+                    ))
+                return ImageCopyResult(result, errors, runtime_images=runtime_images)
             return ImageCopyResult(result, errors)
         finally:
             cleanup_start = time.monotonic()

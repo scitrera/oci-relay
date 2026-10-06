@@ -2,7 +2,8 @@
 
 Implemented for the standalone relay and the separately installed Sparkrun
 plugin, targeting `develop-next` / v0.4.0 with image-copy API 1 and the optional
-pre-pull API 1. The plugin remains outside Sparkrun's source tree.
+pre-pull API 1. Digest-pinned recipes also use the additive image-runtime API 1.
+The adapter can be installed independently or bundled through Sparkrun's vendor script.
 
 ## Data path
 
@@ -12,7 +13,7 @@ Registry -> source fetcher + bounded cache -> receiver relay -> Docker pull
                                          -> fetcher Docker, only if also a target
 ```
 
-The source resolves a tag once, selects one platform, pins the exact manifest
+The source resolves a tag or verifies a requested digest, selects one platform, pins the exact manifest
 and config, then fetches requested blobs by digest. It streams the registry's
 compressed bytes without first pulling into source Docker, unpacking, exporting
 or recompressing. Docker receivers still verify and extract their layers.
@@ -179,13 +180,50 @@ oci-relay peer --endpoint https://SOURCE_IP:9443 \
 ```
 
 The standalone source accepts a tag or SHA-256 digest; a receiver still needs a
-writable destination tag. The plugin currently leaves digest-named runtime
-references on core's existing path because Docker's tag API cannot attach an
-upstream RepoDigest. An explicit registry override for such a reference reports
-unsupported before transfer. Full multi-platform index distribution, foreign
-layer URLs, artifacts, signatures/referrers, range resume and a persistent cache
-are outside this implementation. Hash verification is not publisher signature
-verification.
+writable destination tag. The Sparkrun plugin supplies that local tag and hands
+verified per-host IDs to the launcher, as described below. Full multi-platform
+index distribution, foreign layer URLs, artifacts, signatures/referrers, range
+resume and a persistent payload cache are outside this implementation. Hash
+verification is not publisher signature verification.
+
+## Digest-pinned recipes
+
+Both `repository@sha256:...` and `repository:tag@sha256:...` go through OCI Relay.
+The digest always wins over the tag. A pin can name a platform manifest or a
+multi-platform index: the source verifies the root bytes and every selected
+child descriptor before transferring the chosen platform's layers. It never
+substitutes a mutable tag when the pin is missing, unavailable, or invalid.
+
+Docker's tag API cannot attach an upstream `RepoDigest` to a relay import.
+Instead, the plugin imports under a deterministic `oci-relay/pinned:...`
+retention tag, verifies the source root digest and receiver results, and returns
+each host's **actual immutable Docker image ID** through `ImageCopyResult.runtime_images`.
+Sparkrun uses those IDs for image probes, content-ID materialization and Docker
+launches (`--pull=never`). The original pin remains in the recipe, image plan
+and job metadata. Different store IDs do not make an otherwise identical
+multi-node recipe heterogeneous.
+
+Successful imports also publish small private JSON receipts under
+`remote_cache_dir/pins/` (default `~/.cache/oci-relay/pins/`). Each binds the
+requested reference and registry digest to the verified config and local
+runtime ID. Subsequent operations inspect that immutable ID and its native
+platform. They never trust the retention tag alone. A moved tag cannot change
+the binding; a removed image makes the receipt unusable. Receipts trust the
+management user's host cache and Docker access, just like the locally staged
+relay executable; they are not independently signed provenance documents.
+
+If every receiver already has the verified pin, the plugin reports no transfer
+and needs no registry access. Missing targets use the exact registry source
+when online; native cache negotiation still avoids downloading existing layers.
+With `--offline` or a configured local source mode, a verified local pin can
+serve as the relay source. Offline preflight recognizes prior relay imports.
+A forced pull re-verifies the registry source; offline mode rejects forced pulls.
+Deleting receipts loses the upstream binding for images that Docker cannot
+inspect by their original pin; an online relay operation can recreate it.
+
+The engine remains compatible with the v0.1.0 binaries. The plugin requires
+Sparkrun's image-runtime API 1 for this handoff and reports an explicit
+compatibility error on older hosts instead of silently dropping the digest.
 
 Qualification tests cover two physical
 receivers, shared layers, exact-image skipping, source-as-receiver, all three
