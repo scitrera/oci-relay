@@ -65,6 +65,6 @@ do not edit generated workflow YAML independently.
    Development binaries similarly require explicit configuration.
 
 Python package publication is not enabled in the generated workflows yet.
-The installable plugin and reproducible vendoring path are available locally.
+Plugin source and the pinned vendoring metadata are available from GitHub.
 Binary tagging and the subsequent adapter-pin publication are separate steps;
 never move the engine tag to add its archive checksums.

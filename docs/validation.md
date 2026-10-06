@@ -5,6 +5,40 @@ throughput benchmark or a claim that all design2 milestones have shipped.
 Later sections supersede earlier states. Development now uses the installed
 plugin via `source dev.sh`; the previous Sparkrun vendor snapshot was removed.
 
+## Published v0.1.0 qualification (2026-10-06)
+
+The public engine tag is `9dd73f5ef8a1ba3a8717c305fb8461201696aca8`.
+The release's `plugin-release.json` pins adapter commit
+`bfc0c636d7c06c9eacb7acbbde952b28de102cd5`, which adds verified archive checksums
+without changing the engine. The engine tag was not moved.
+
+- Downloaded all three release archives, checked their SHA-256 values and
+  executable architectures, and compared redistributed license/notice files.
+  Executed the published Linux arm64 binary and checked version, protocol and
+  engine commit. Verified real online acquisition and offline cache reuse for
+  both Linux architectures.
+- All 181 plugin tests passed with that published arm64 binary, including the
+  opt-in real Docker and registry-source tests. Release CI passed Go race
+  tests, vet, license checks, govulncheck and all three platform builds.
+- Imported the adapter using Sparkrun's actual `update --latest` GitHub flow.
+  Clean-process tests confirmed alpha auto-enablement, stable/beta disablement,
+  explicit overrides, and no import of the disabled bundled module.
+- The bundled provider downloaded its binary from GitHub with no development
+  override and completed fresh/warm copies between two Linux arm64 Spark hosts
+  over direct HTTP/2, SSH forwarding and SSH stdio. Docker image IDs and ordered
+  layer hashes matched. Warm copies transferred zero layer bytes. Disposable
+  test images were removed; no model was started or daemon reconfigured.
+- Sparkrun wheel/source-package checks verified the adapter, pins, license
+  exception, provenance, vendoring script/lock and exported contract tests.
+- The release includes corresponding source from the engine tag, vendored Go
+  dependencies and Go 1.25.14 build instructions. It built successfully with
+  `GOPROXY=off` and `-mod=vendor`.
+
+Linux amd64 Docker and native macOS runtime qualification remain open. Windows
+amd64/arm64 cross-compile but are not published; see [platforms](platforms.md)
+for the runtime work needed. The bundled plugin uses Linux execution hosts;
+Mac controllers coordinate delegated transfers without executing a local relay.
+
 ## Real multi-host qualification
 
 Authorized Sparkrun cluster `benchmark-cluster`: source `host-a`, receivers
