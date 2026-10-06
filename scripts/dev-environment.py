@@ -30,13 +30,15 @@ def configure(destination: Path, base: Path, binary: Path) -> Path:
         data = {}
     if not isinstance(data, dict):
         raise ValueError('Sparkrun config must be a mapping')
-    for key in ('integrations', 'plugins'):
+    for key in ('integrations', 'plugins', 'features'):
         if not isinstance(data.setdefault(key, {}), dict):
             raise ValueError(key + ' must be a mapping')
     settings = data['plugins'].setdefault('oci-relay', {})
     if not isinstance(settings, dict):
         raise ValueError('plugins.oci-relay must be a mapping')
     data['integrations']['oci-relay'] = True
+    # Prefer the editable installed adapter even on alpha with a bundled copy.
+    data['features']['plugins.oci_relay'] = False
     data['container_distribution_provider'] = 'oci-relay'
     # A dev failure must not silently benchmark builtin copy instead.
     data['container_distribution_fallback'] = False

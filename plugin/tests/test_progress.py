@@ -5,8 +5,7 @@
 import logging
 import threading
 
-from sparkrun.core.progress import PROGRESS
-from sparkrun_oci_relay.progress import Progress
+from sparkrun_oci_relay.progress import PROGRESS, Progress
 
 
 def event(sequence=1, phase="transferring", **fields):

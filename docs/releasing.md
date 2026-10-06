@@ -13,8 +13,7 @@ do not edit generated workflow YAML independently.
 3. Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE, LICENSE_EXCEPTION,
    COPYRIGHT and dependency notices are included in both binary archives.
    Verify plugin wheels and vendored copies contain the AGPL license/exception.
-4. When the public repository exists, review and commit the source and generated
-   CI. A matching `vVERSION` tag triggers Linux amd64/arm64 archive builds plus
+4. Review and commit the source and generated CI, then push to the public repository. A matching `vVERSION` tag triggers Linux amd64/arm64 archive builds plus
    `checksums.txt`. Local generation does not create or push that tag.
 5. Publish release-matched corresponding source alongside binaries. The Git tag
    must include all source, module pins, CLI/plugin code, versions.yaml and build
@@ -38,22 +37,32 @@ do not edit generated workflow YAML independently.
    A post-release adapter commit is necessary because archive checksums do not
    exist until the engine assets have been built. No corresponding engine code
    may change beneath the same engine version.
-7. From that clean commit run `scripts/vendor-plugin.py --sparkrun PATH`.
-   It requires the matching engine tag in history, unchanged engine source,
-   both platform pins, and records the exact adapter commit and file hashes.
-   This is an explicit future bundling decision: development uses `source dev.sh`
-   and an installed editable plugin. Sparkrun `develop-next` / 0.4.0 currently
-   contains only the general image-distribution compatibility API, with no OCI
-   Relay snapshot or bindings. Vendoring adds the disabled feature/loader bindings,
-   host package data and Ruff exclusion as reviewable target-tree changes.
-   Run `--check` in the eventual host validation/release process; it verifies
-   the snapshot and those bindings. Disable the installed integration before
-   enabling the bundled feature.
+7. Attach `plugin-release.json` to the same GitHub release after committing and
+   pushing the verified archive pins. It identifies the adapter commit, which
+   descends from the engine tag without changing `cmd`, `internal`, `go.mod`,
+   or `go.sum`:
+
+   ```json
+   {
+     "schema": 1,
+     "repository": "https://github.com/scitrera/oci-relay.git",
+     "version": "0.1.0",
+     "commit": "FULL_ADAPTER_COMMIT_SHA"
+   }
+   ```
+
+   From Sparkrun, run `python scripts/vendor-oci-relay.py update --latest --initial`
+   (omit `--initial` on updates), then `python scripts/vendor-oci-relay.py verify`.
+   The script resolves this published descriptor rather than a floating branch,
+   validates host APIs and both archive pins, and verifies engine ancestry.
+   It records exact file hashes in `vendor/oci-relay.lock` and imports offline
+   contract tests. The bundled `plugins.oci_relay` feature defaults on only for
+   alpha. Keep installed and bundled registration mutually exclusive.
 8. A development snapshot uses explicit `--development` and has
    `development_snapshot = true`. Do not describe it as a public release pin.
    Development binaries similarly require explicit configuration.
 
 Python package publication is not enabled in the generated workflows yet.
 The installable plugin and reproducible vendoring path are available locally.
-Public repository creation, pushes, release publication and production
-enablement are separate operations.
+Binary tagging and the subsequent adapter-pin publication are separate steps;
+never move the engine tag to add its archive checksums.

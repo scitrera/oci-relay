@@ -19,7 +19,7 @@ resource limits, and reports progress.
 Native access supports qualified rootful Linux Docker 29+ stores. Real-engine
 qualification currently covers Linux arm64; Linux amd64 binaries are
 cross-built. See [storage compatibility](docs/storage-compatibility.md) and
-[validation](docs/validation.md). A public release is not yet available.
+[validation](docs/validation.md). Published binaries are available from [GitHub releases](https://github.com/scitrera/oci-relay/releases).
 
 ## Quick start with Sparkrun
 
@@ -36,7 +36,8 @@ deactivate
 The setup builds the relay, installs both projects editably, and enables the
 plugin in a private development configuration. It preserves normal user
 configuration and keeps the plugin outside Sparkrun's source tree. Image-transfer
-progress is visible by default. See [development setup](docs/development.md)
+progress is visible by default. The bundled plugin defaults on for alpha and
+off for other channels; this setup explicitly selects the editable adapter. See [development setup](docs/development.md)
 for details or [plugin configuration](docs/sparkrun-plugin.md) for manual setup.
 
 To build the standalone executable:

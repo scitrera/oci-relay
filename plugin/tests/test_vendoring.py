@@ -21,7 +21,8 @@ def test_explicit_vendoring_installs_bindings_and_refuses_tampering(tmp_path):
     subprocess.run([*command, '--check'], check=True, capture_output=True)
     state = {}
     exec((core / 'features.py').read_text(), state)
-    assert state['registered'] == [{'name': 'plugins.oci_relay', 'description': 'OCI Relay image distribution', 'default': False}]
+    assert state['registered'] == [{'name': 'plugins.oci_relay', 'description': 'OCI Relay image distribution',
+                                    'channel_defaults': {'alpha': True}, 'default': False}]
     exec((core / 'in_tree_plugins.py').read_text(), state)
     assert state['IN_TREE_PLUGIN_FEATURES']['oci_relay'] == 'plugins.oci_relay'
     metadata = tomllib.loads((tmp_path / 'pyproject.toml').read_text())

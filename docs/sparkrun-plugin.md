@@ -14,12 +14,24 @@ Coldsnap materialization and launch ordering. Explicit per-node pull mode and
 local-only ensure operations retain builtin behavior. See
 [registry sources](registry-source.md) for selection, authentication and cache limits.
 
-Sparkrun `develop-next` retains the general image-distribution API, but has no
-OCI Relay source, feature binding or vendor metadata by default. This project
-is an independently installed plugin. `source dev.sh` installs and enables it
-locally; manual installations use this configuration:
+Sparkrun `develop-next` can bundle the release adapter using its
+`vendor-oci-relay.py` script. Its `plugins.oci_relay` feature defaults on for
+alpha and off for stable/beta; explicit feature overrides take precedence.
+With the bundled provider enabled, normal `container_distribution_provider: auto`
+selects it. To opt in on stable/beta (or set `false` to opt out on alpha):
 
 ```yaml
+features:
+  plugins.oci_relay: true
+```
+
+The independently installed plugin remains available. `source dev.sh` enables
+the editable installed adapter and disables the bundled gate in private dev
+configuration. For a manual installed adapter, disable the bundled gate and use:
+
+```yaml
+features:
+  plugins.oci_relay: false  # Avoid loading the bundled copy as well.
 integrations:
   oci-relay: true
 container_distribution_provider: oci-relay
@@ -31,8 +43,8 @@ plugins:
     transport: auto
     registry_source: true  # Default; overlap missing-image pulls with distribution.
     registry_cache_bytes: 0  # Optional separate disk budget for retained compressed blobs.
-    # Development only, until a public release has trusted checksum pins:
-    development_binary: /absolute/path/to/oci-relay
+    # Optional development override; releases download verified binaries:
+    # development_binary: /absolute/path/to/oci-relay
 ```
 
 The installed distribution exposes the `sparkrun.plugins` entry point named
@@ -45,8 +57,8 @@ For a locally supplied production binary, configure `binary_paths` and
 `binary_sha256` maps keyed by `amd64`/`arm64`. The controller verifies the ELF
 architecture and hash, stages it to each execution host, verifies the remote
 hash, and checks the version/protocol before use. Hosts do not need internet
-access. Offline mode never downloads a binary. `releases.json` is deliberately
-empty until real release archive checksums can be pinned.
+access. Offline mode never downloads a binary. `releases.json` pins the published archives for each supported architecture.
+The adapter is pinned after the binary release, without moving the engine tag.
 
 ## Transports
 

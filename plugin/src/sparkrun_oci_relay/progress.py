@@ -10,7 +10,9 @@ import logging
 import threading
 import time
 
-from sparkrun.core.progress import PROGRESS
+# Sparkrun's public progress level (between INFO and WARNING). Keep rendering
+# importable without the host so the dependency-isolated plugin CI can test it.
+PROGRESS = 25
 
 logger = logging.getLogger(__name__)
 

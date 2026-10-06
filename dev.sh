@@ -21,10 +21,6 @@ _oci_relay_dev_setup() {
         return 1
     fi
     checkout="$(cd "$checkout" && pwd -P)" || return 1
-    if [[ -e "$checkout/src/sparkrun/plugins/oci_relay" ]]; then
-        echo "Selected Sparkrun checkout still contains a vendored OCI Relay; use an unvendored checkout." >&2
-        return 1
-    fi
     if ! command -v uv >/dev/null 2>&1; then
         echo "uv is required to create the plugin development environment." >&2
         return 1

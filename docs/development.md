@@ -42,8 +42,8 @@ installed-plugin registration. It uses `../oss-sparkrun` by default; select a
 different compatible checkout with `export SPARKRUN_CHECKOUT=/path/to/sparkrun`
 before sourcing. Use `develop-next` / 0.4.0. The script uses that checkout's
 current files without fetching, switching branches or copying plugin source
-into it. A checkout containing a vendored OCI Relay is rejected to avoid two
-copies registering the same provider.
+into it. When that checkout contains a bundled OCI Relay, the private dev configuration
+disables its feature gate and enables the editable installed adapter instead.
 
 The active shell uses private `.dev/config/config.yaml`. On first setup,
 config.yaml, cluster definitions, registry definitions and local recipes are
@@ -79,12 +79,12 @@ python scripts/vendor-plugin.py --sparkrun /path/to/target-sparkrun --check
 ```
 
 Vendoring is never invoked by `dev.sh`. The script copies the adapter and license
-material, adds an initially disabled `plugins.oci_relay` feature and in-tree
+material, adds an alpha-enabled `plugins.oci_relay` feature and in-tree
 loader binding, and includes license/release files in host package metadata.
 It also excludes the immutable vendor directory from host Ruff checks. Review
-those target-tree changes before committing. After bundling, enable
-`features.plugins.oci_relay: true` and select the provider, with the installed
-integration disabled. `--check` verifies both snapshot hashes and host bindings;
+those target-tree changes before committing. After bundling, the feature defaults on for alpha and off for stable/beta.
+Use the `plugins.oci_relay` key under `features` for an explicit override, with
+the installed integration disabled. `--check` verifies both snapshot hashes and host bindings;
 include that check in the future host release process.
 
 The script records exact content hashes and labels worktree imports as
@@ -93,3 +93,16 @@ containing the matching engine release tag, unchanged engine source, and
 checksum entries for both binary architectures.
 See [release procedure](releasing.md). No public repository, tag, release
 or push is created by local generation.
+
+For published releases, prefer the host-owned script from Sparkrun:
+
+```sh
+python scripts/vendor-oci-relay.py update --latest --initial
+python scripts/vendor-oci-relay.py verify
+```
+
+Run those commands from the Sparkrun checkout; omit `--initial` on updates.
+The script pins the adapter commit from `plugin-release.json` attached to the
+engine release, imports license material and offline contract tests, and records
+hashes in `vendor/oci-relay.lock`. Explicit reviewed revisions use
+`--source PATH --rev FULL_COMMIT`. Verification requires no network access.

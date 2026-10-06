@@ -25,6 +25,7 @@ def test_private_config_preserves_user_settings_and_local_edits(tmp_path):
     config = dev.configure(destination, base, tmp_path / 'relay')
     data = yaml.safe_load(config.read_text())
     assert data['integrations']['oci-relay'] is True
+    assert data['features']['plugins.oci_relay'] is False
     assert data['container_distribution_provider'] == 'oci-relay'
     assert data['container_distribution_fallback'] is False
     assert data['plugins']['oci-relay']['source_streams'] == 7
