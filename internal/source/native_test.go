@@ -124,6 +124,21 @@ func TestNativeExactReconstructionAndDeferredPayload(t *testing.T) {
 	wg.Wait()
 }
 
+func TestNativeAcceptsDocker29AndLater(t *testing.T) {
+	root, id, _, _, _ := nativeFixture(t)
+	for _, version := range []string{"29.0.0", "29.3.0", "30.0.0", "29.1.3-0ubuntu1~24.04.1"} {
+		t.Run(version, func(t *testing.T) {
+			n, err := NewNative(context.Background(), root, id, version, v1.Platform{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := n.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestNativeRejectsCorruptionAndEscape(t *testing.T) {
 	for _, change := range []string{"payload", "header", "escape", "diff", "config", "version", "cancel"} {
 		t.Run(change, func(t *testing.T) {
@@ -133,7 +148,7 @@ func TestNativeRejectsCorruptionAndEscape(t *testing.T) {
 			defer cancel()
 			switch change {
 			case "version":
-				version = "99.0.0"
+				version = "28.5.2"
 			case "cancel":
 				cancel()
 			case "payload":

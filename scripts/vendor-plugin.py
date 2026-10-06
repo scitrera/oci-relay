@@ -75,6 +75,14 @@ parser.add_argument("--check", action="store_true", help="verify snapshot hashes
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 destination = args.sparkrun.resolve() / "src/sparkrun/plugins/oci_relay"
+api_path = args.sparkrun / "src/sparkrun/core/image_distribution.py"
+if not api_path.is_file():
+    raise SystemExit("Target needs Sparkrun image-distribution API 1 and pre-pull API 1")
+api_constants = {target.id: node.value.value for node in ast.parse(api_path.read_text()).body
+                 if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                 for target in node.targets if isinstance(target, ast.Name)}
+if any(api_constants.get(name) != 1 for name in ("IMAGE_DISTRIBUTION_API_VERSION", "IMAGE_PULL_API_VERSION")):
+    raise SystemExit("Target needs Sparkrun image-distribution API 1 and pre-pull API 1")
 if args.check:
     if destination.is_symlink():
         raise SystemExit("Vendored directory must not be a symlink")
@@ -124,7 +132,7 @@ lock = (
     f"version = {json.dumps(version)}\ncommit = {json.dumps(revision)}\n"
     f"development_snapshot = {str(args.development).lower()}\n"
     f"content_sha256 = {json.dumps(content_hash)}\n"
-    "image_distribution_api = 1\n\n[files]\n"
+    "image_distribution_api = 1\nimage_pull_api = 1\n\n[files]\n"
 )
 lock += "".join(json.dumps(name) + " = " + json.dumps(sha) + "\n" for name, sha in hashes.items())
 updates = host_updates(args.sparkrun.resolve())

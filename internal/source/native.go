@@ -20,6 +20,7 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	specs "github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/image"
 	"github.com/vbatts/tar-split/tar/asm"
 	"github.com/vbatts/tar-split/tar/storage"
@@ -30,6 +31,7 @@ import (
 // for its lifetime and mount the metadata and layer trees read-only.
 type Native struct {
 	Image              *image.Image
+	DiffIDs            []digest.Digest
 	PreparationSeconds float64
 	MetadataBytes      int64
 	metadata, layers   *os.Root
@@ -42,8 +44,21 @@ type nativeLayer struct {
 }
 
 func NewNative(ctx context.Context, root, id, engineVersion string, platform v1.Platform) (_ *Native, returnErr error) {
-	if engineVersion != "29.1.3" && engineVersion != "29.2.1" {
-		return nil, errors.New("native source supports only qualified Docker 29.1.3/29.2.1 classic overlay2 stores")
+	return newNative(ctx, root, id, engineVersion, platform, nil)
+}
+
+// NewNativeLayers reads metadata only for requested DiffIDs in a pinned image.
+// Image remains nil: this is a verified layer source, not a rewritten image.
+func NewNativeLayers(ctx context.Context, root, id, version string, platform v1.Platform, wanted map[digest.Digest]bool) (*Native, error) {
+	if wanted == nil {
+		return nil, errors.New("native layer selection is required")
+	}
+	return newNative(ctx, root, id, version, platform, wanted)
+}
+
+func newNative(ctx context.Context, root, id, engineVersion string, platform v1.Platform, wanted map[digest.Digest]bool) (_ *Native, returnErr error) {
+	if !engine.SupportsStoreVersion(engineVersion) {
+		return nil, errors.New("native classic overlay2 source requires Docker 29 or newer")
 	}
 	dg := digest.Digest(id)
 	if dg.Validate() != nil || dg.Algorithm() != digest.SHA256 {
@@ -79,6 +94,10 @@ func NewNative(ctx context.Context, root, id, engineVersion string, platform v1.
 	if len(cfg.RootFS.DiffIDs) > image.MaxDescriptors-1 {
 		return nil, errors.New("too many native layers")
 	}
+	if cfg.RootFS.Type != "layers" || !image.Matches(platform, cfg.Platform) {
+		return nil, errors.New("native config platform/rootfs mismatch")
+	}
+	n.DiffIDs = cfg.RootFS.DiffIDs
 	manifest := v1.Manifest{Versioned: specs.Versioned{SchemaVersion: 2}, MediaType: v1.MediaTypeImageManifest,
 		Config: v1.Descriptor{Digest: dg, Size: int64(len(config)), MediaType: v1.MediaTypeImageConfig}}
 	var parent digest.Digest
@@ -92,6 +111,10 @@ func NewNative(ctx context.Context, root, id, engineVersion string, platform v1.
 		chain := diff
 		if parent != "" {
 			chain = digest.FromString(string(parent) + " " + string(diff))
+		}
+		if wanted != nil && !wanted[diff] {
+			parent = chain
+			continue
 		}
 		directory := "layerdb/sha256/" + chain.Encoded() + "/"
 		storedDiff, err := readRoot(n.metadata, directory+"diff", 128)
@@ -152,6 +175,10 @@ func NewNative(ctx context.Context, root, id, engineVersion string, platform v1.
 		n.blobs[diff] = layer
 		manifest.Layers = append(manifest.Layers, v1.Descriptor{Digest: diff, Size: layer.size, MediaType: v1.MediaTypeImageLayer})
 		parent = chain
+	}
+	if wanted != nil {
+		n.PreparationSeconds = time.Since(start).Seconds()
+		return n, nil
 	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -278,15 +305,14 @@ func (w contextWriter) Write(b []byte) (int, error) {
 }
 
 func (n *Native) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error {
-	known, ok := n.Image.Descriptor(d.Digest)
-	if !ok || known.Size != d.Size {
-		return errors.New("descriptor not in native image")
-	}
-	if d.Digest == n.Image.Descriptors[0].Digest {
+	if n.Image != nil && d.Digest == n.Image.Descriptors[0].Digest && d.Size == int64(len(n.Image.Config)) {
 		_, err := io.Copy(contextWriter{ctx, w}, bytes.NewReader(n.Image.Config))
 		return err
 	}
-	layer := n.blobs[d.Digest]
+	layer, ok := n.blobs[d.Digest]
+	if !ok || layer.size != d.Size || d.MediaType != v1.MediaTypeImageLayer {
+		return errors.New("descriptor not in native layer source")
+	}
 	root, err := n.layers.OpenRoot(layer.cacheID + "/diff")
 	if err != nil {
 		return err
@@ -300,6 +326,40 @@ func (n *Native) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error 
 	if err = asm.WriteOutputTarStream(nativeGetter{root, ctx}, up, contextWriter{ctx, w}); err != nil {
 		return fmt.Errorf("reconstruct layer %s: %w", d.Digest, err)
 	}
+	return nil
+}
+
+func (n *Native) Layer(diff digest.Digest) (v1.Descriptor, bool) {
+	l, ok := n.blobs[diff]
+	return v1.Descriptor{Digest: diff, Size: l.size, MediaType: v1.MediaTypeImageLayer}, ok
+}
+
+// MergeLayers retains two store directory handles regardless of image count.
+// The caller continues to retain every image supplying these layer references.
+func (n *Native) MergeLayers(other *Native) error {
+	if n.Image != nil || other.Image != nil {
+		return errors.New("cannot merge full native images")
+	}
+	for _, roots := range [][2]*os.Root{{n.metadata, other.metadata}, {n.layers, other.layers}} {
+		a, err := roots[0].Stat(".")
+		if err != nil {
+			return err
+		}
+		b, err := roots[1].Stat(".")
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(a, b) {
+			return errors.New("native layers belong to different stores")
+		}
+	}
+	for d, layer := range other.blobs {
+		if old, ok := n.blobs[d]; ok && old.size != layer.size {
+			return errors.New("conflicting native layer sizes")
+		}
+		n.blobs[d] = layer
+	}
+	n.MetadataBytes += other.MetadataBytes
 	return nil
 }
 

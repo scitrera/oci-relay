@@ -7,8 +7,9 @@ SPDX-FileComment: The sparkrun additional permission in LICENSE_EXCEPTION applie
 # Contributing to OCI Relay
 
 Describe the proposed change and provide relevant validation. Use the checks
-in README.md and the compatibility matrix in docs/validation.md. Keep relay
-mechanisms in Go and Sparkrun-specific orchestration and tuning in the plugin.
+in [development](docs/development.md) and the compatibility record in
+[validation](docs/validation.md). Keep relay mechanisms in Go and
+Sparkrun-specific orchestration and tuning in the plugin.
 
 Before a contribution can be merged, its contributor must accept the
 [OCI Relay Contributor License Agreement](CLA.md) through a contribution

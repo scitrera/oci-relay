@@ -71,11 +71,11 @@ It does not prune unrelated Docker images, containers or caches.
 
 - Public-API Docker sources use bounded per-upload staging or the explicit
   full-archive mode. The opt-in read-only classic-store adapter below removes
-  source payload staging on qualified engines. There is no automatic source-mode
-  probing. An unidentified push upload larger than its cap fails explicitly.
-- OCI-layout input is supported; native registry fetching, full multi-platform
-  index distribution, HTTP Range resume, receiver peer sourcing and persistent
-  caches remain future work.
+  source payload staging on qualified engines. The plugin auto-selects a permitted
+  source from qualified host facts; the Go CLI receives an explicit mode. An unidentified push upload larger than its cap fails explicitly.
+- OCI-layout and registry sources are supported. Registry operations select one
+  platform; full index distribution, HTTP Range resume, receiver peer sourcing
+  and persistent caches remain future work.
 - Linux amd64 is cross-compiled; real amd64 Docker qualification remains open.
   Containerd-backed Docker stores and arbitrary Engine versions are unqualified.
 - `max_buffer_bytes` bounds managed blob ring allocations, not total process RSS.
@@ -114,8 +114,8 @@ These identify local development builds, not release archive checksum pins.
 
 ## Subsequent large-image and SDK qualification
 
-The [DeepSeek image benchmark](benchmarks/deepseek-2026-10-03.md) supersedes the
-earlier absence of fast-network measurements. It also records and tests fixes
+DeepSeek image benchmarking supersedes the earlier absence of fast-network
+measurements. It also tested fixes
 for per-blob push completion, failed-upload reservation release, and remote
 process cancellation. The model deployment was stopped at the user's request;
 later tests validate image import and identity without model startup.
@@ -155,7 +155,7 @@ tar-split reconstruction, confined file opens and mandatory full SHA-256 checks.
 Its private-store access is explicit, read-only and held under a plugin-owned
 image reference. Unsupported versions/drivers/user namespaces fail before pulls.
 
-The [native-source benchmark](benchmarks/native-2026-10-03.md) records two cold
+Native-source benchmarking measured two cold
 25 GB image distributions to `host-b`/`host-c`: **120.329 and 122.140 seconds**, versus
 prior builtin SSH save/load runs of **237.084 and 239.362 seconds**. Readiness
 was about 1.5 seconds; every required unique layer was hash-verified, with zero
@@ -234,12 +234,12 @@ limits. Workers settle before failure cleanup and all routes precede pulls.
 Normal logs include full provider phase/cleanup times and receiver download/
 extraction milestones. No Go engine or integrity-boundary changes were needed.
 
-The [new benchmark report](benchmarks/startup-2026-10-04.md) records setup-only
+Startup benchmarking measured setup-only
 A/B measurements of 15.170–15.367 s before and 5.327–5.518 s after: about ten
 seconds saved. The complete cold 25 GB/two-receiver provider call takes 120.692 s
 with default Docker settings, now including binary checks, discovery, preflight
 and cleanup. Exact image IDs match on both destinations. Five source replays
-occurred; the report retains actual byte counts and phase boundaries.
+occurred; actual byte counts and phase boundaries were recorded.
 
 Disposable-daemon CPU profiles expose receiver filesystem/hash/scheduling work.
 GOMAXPROCS=2 trials reduce receiver import by roughly 19–26 seconds, but this
@@ -264,8 +264,7 @@ daemons, volumes and helpers were removed; executable caches remain.
 Implemented and measured source coalescing, cache-aware import, relay-only
 slot/CPU tuning and full native streaming load in the requested 3 → 2 → 4 → 1
 order. All are opt-in; normal Docker settings and existing defaults remain
-unchanged. See [complete results](benchmarks/optimization-3241-2026-10-04.md)
-and its structured evidence.
+unchanged.
 
 A 250 ms source join window reduced source acquisition from 42.95 GB to almost
 exactly 25.00 GB, but did not improve total cold latency. Selective load reused
@@ -361,3 +360,185 @@ Pre-publication validation passed: 93 plugin tests including real Docker,
 race tests, vet, formatting, Python lint, shell syntax, generated workflows /
 versions and all 24 linked dependency license texts. Local dev configuration,
 binaries, editor recovery files and private work notes are excluded from Git.
+
+## Multiple TCP paths and transfer-only mode (2026-10-04)
+
+Added explicitly bound data paths, per-connection scheduling/counters, safe
+whole-blob failover, plugin route qualification and an import-free VERIFIED mode.
+Benchmarking covered eight comparisons
+of the 25 GB recipe image. Two connections reduced verification from 35.7 to
+about 21–22 seconds whether using one NIC or two. Two-receiver verification
+fell from 32.5 to about 22 seconds. All bytes retained source/receiver SHA-256
+verification; no large-image Docker import timing claim is made for these runs.
+
+Complete Go race tests with real Docker, vet, static arm64/amd64 builds, all
+112 Python tests including real integration, Ruff, generated CI/version checks
+and dependency notices passed. After batching route probes, the 19 affected
+route tests and actual remote plugin import passed again. Fresh 32 MiB plugin
+qualification verified the exact Docker image ID. Controller/four-host cleanup
+audits found zero owned operations, helpers, test tags or relay processes.
+
+## Cold import and transport profiles (2026-10-04)
+
+Follow-up measurements covered four real plugin imports in A–B–B–A order,
+resetting two isolated Docker stores before
+every run. One versus two connections averaged 121.29 versus 113.58 seconds,
+including provider setup and cleanup. Every target completed with the pinned
+image ID. Source/receiver hashing remained enabled and no normal daemon settings
+changed. Separate diagnostic profiles locate substantial receiver HTTP/2
+flow-control write contention; global defaults remain unchanged.
+
+After profiling and fixture removal, a controller/four-host audit found zero
+relay processes, operation directories, helper containers, benchmark volumes or
+test tags. No models ran. This follow-up changed documentation only; the binary
+was the same build as the preceding tested multi-path implementation. The
+[registry-source proposal](registry-source.md) records the pre-pull plugin hook,
+Dragonfly reuse assessment and upstream-cache constraints for future work.
+
+
+## Registry-backed source (2026-10-04)
+
+Implemented registry metadata resolution, authenticated on-demand compressed
+blob streaming, optional bounded disk retention, and the generic Sparkrun
+pre-pull hook on develop-next. Existing image-copy providers remain compatible;
+OCI Relay remains an installed plugin, not vendored source. Registry qualification checked
+upstream byte counts, missing-layer reuse, warm skips and a fetcher that also
+imports. Full validation includes real Docker over all transports, race tests,
+credential/token/redirect and corruption tests, and a public Docker Hub download.
+The initial direct Dragonfly OCI import was replaced with attributed parser
+reuse to avoid its flagged legacy Docker dependency; the final vulnerability
+scan is clean.
+
+## Large registry image performance (2026-10-04)
+
+Twelve distribution trials used one pinned public GHCR manifest on two physical
+receivers, with isolated Docker 29.2.1 overlay2 stores. Every receiver matched
+the exact config ID and all 30 RootFS DiffIDs. Measurements included
+complete provider times, upstream bytes, partial-cache construction and baseline
+timing boundaries. Fresh relay operations took 238–263 seconds versus 381
+seconds for source pull followed by SSH save/load. A 313 MB missing-layer update
+took 11–15 seconds versus 159 seconds for save/load from an already-ready source.
+Direct pulls were comparable in latency; single trials and WAN variation limit
+stronger claims. Disk retention had no hits and defaults remain unchanged.
+
+All owned test daemons, volumes, spools and added fixture images were removed.
+A controller/four-host audit found zero remaining owned runtime resources.
+Normal daemon settings and workloads were untouched; no models ran. This
+follow-up changes benchmark documentation only, using the previously tested
+registry binary without rebuilding or modifying production code.
+
+
+## Mixed overlay2 / containerd qualification (2026-10-05)
+
+Native containerd content sources and per-receiver representation negotiation
+are implemented for qualified Docker 29.2.1 containerd overlayfs stores,
+alongside existing 29.1.3/29.2.1 classic overlay2 support. Config identity is now
+separate from Docker's backend-dependent image ID. Public push/save paths also
+handle containerd platform manifests correctly.
+
+Four-way benchmarking completed 32 successful
+trials on two physical Spark hosts, using isolated Docker daemons and a 1 GiB
+four-layer workload. Both methods used the same fast interface. Relay reduced
+cold time by 23–53% and partial-cache time by 49–70% versus SSH save/load.
+Every partial trial transferred exactly one missing layer; cached layers used
+zero local payload reads and zero network payload, including mixed stores.
+
+Additional checks exercised actual plugin source/receiver helpers over direct
+HTTP/2 and SSH stdio, a registry update into a containerd store with a raw cached
+base, and a warm skip with differing source/installed manifest digests. Both
+backends rejected valid compressed hashes paired with false DiffIDs and kept
+the previous destination tag. A cleanup audit exposed and fixed a redundant
+base-tag pin during moving-tag updates; the helper container now supplies that
+pin, with a permanent integration regression assertion.
+
+Go race tests (including real-Docker fixtures), Go vet, Python lint, and all 135
+plugin tests passed; the 20 real plugin integration cases were rerun after the
+pin-lifecycle fix. All four isolated daemons and their labeled volumes and
+operation directories were removed. No model/application was started and no
+normal Docker daemon was reconfigured. See [storage compatibility](storage-compatibility.md)
+for exact store/version qualification, identity semantics and limits.
+
+## Docker 29+ admission policy (2026-10-05)
+
+Replaced exact Docker patch-version allowlists with a major-version baseline
+of 29 or newer in plugin native/automatic archive selection, both Go native
+adapters, and the optional load importer. Vendor/build suffixes are accepted;
+older, unknown or malformed versions remain ineligible. Backend, native layout,
+read-only access and content-integrity checks are unchanged. The receiver still
+checks its supplied daemon facts against its actual Docker daemon.
+
+Go race tests and vet pass. Plugin tests: 145 passed, 20 real-Docker integration
+cases skipped for this policy-only change; Python lint and diff checks pass.
+Regression tests exercise 29.0.0, later patches, future majors, vendor suffixes,
+older/malformed versions, source adapters, receiver helper selection and the
+load-importer gate. Static Linux arm64/amd64 development binaries were rebuilt.
+These version fixtures do not expand the real-engine test matrix above.
+
+## Expanded cache discovery and per-layer reuse (2026-10-05)
+
+The Go inventory command now backs plugin and standalone discovery: all image
+records are deduplicated and inspected in batches of 32 with eight concurrent
+requests, bounded by a metadata time budget rather than the previous 128-entry
+cutoff. The default budget is 10 seconds; plugin `cache_discovery_seconds` accepts
+1–300. Partial discovery is reported explicitly and cannot authorize unknown
+cache skips. Candidate metadata is revalidated against the actual source.
+
+Native receiver reuse now combines layers from multiple images, including
+matching DiffIDs under different parents. Classic store readers scan only
+selected tar-split metadata and retain donor images with never-started owned
+containers. Containerd probes requested blob paths and retains open files,
+including bytes without an image record. Negotiation distinguishes a matching
+parent chain, locally available blob bytes, and missing bytes, and requires an
+explicit acknowledgement of cache schema 2. Config and DiffID identity remain
+unchanged; cached bytes still pass full SHA verification when read.
+
+Cache benchmarking completed 16 passing
+trials on isolated overlay2/containerd receivers with raw/gzip sources. Native
+reuse fetched one missing layer and reused two from other parent chains. It
+reduced source bytes by roughly two thirds except when containerd ordinary pull
+already reused the exact gzip blobs. Small loopback transfers sometimes took
+longer due to discovery/retention overhead; this does not establish a universal
+speedup. All owned test daemons, volumes and retention containers were removed.
+
+Go race tests, including real-Docker pull/load/integrity fixtures, and Go vet
+pass. Plugin regression coverage includes two new real registry tests over
+direct HTTP/2 and SSH stdio, plus discovery-budget validation. Tests exercise
+late inventory matches, duplicate IDs, bounded concurrency, partial discovery,
+GC unlink retention, selected metadata reads, corruption, confinement, protocol
+validation and cleanup after cache-retention failures.
+
+## Default-visible image-transfer progress (2026-10-06)
+
+The plugin reports preparation, receiver cache discovery, per-host layer bytes,
+throughput and reuse, import, verification, cleanup, and a final summary through
+Sparkrun's existing `PROGRESS` level. A 30-second heartbeat covers silent setup
+and preparation. Registry upstream bytes remain separate from receiver totals.
+Expected transfer size is an upper bound because Docker can discover additional
+cache hits; byte progress never changes success or integrity decisions.
+
+Receivers send bounded advisory snapshots over the existing authenticated
+HTTP/2 connection. Reporting has its own cancellable goroutine and a two-second
+request deadline, with no unbounded event queue or data-worker dependency.
+Counters distinguish unique received offsets from retry/replay payload traffic.
+
+Validation passed:
+
+- Full Go race suite, including real Docker pull/load and integrity checks;
+  Go vet and Python lint.
+- Full plugin suite, followed by a focused rerun of progress and all 25 real
+  plugin integration cases after final rendering/cleanup refinements.
+- Deliberately slowed fresh registry pulls on direct HTTP/2, SSH forwarding,
+  and SSH stdio: default-visible nonzero byte updates arrived before image
+  verification, with exact final config/DiffIDs and separate registry status.
+- Fresh, partial-cache, and already-present registry cases on all three
+  transports: summaries count only transferred payloads, report a reused base
+  for partial updates, and zero transferred bytes for warm images.
+- Concurrent replays and partial retries do not inflate unique-byte progress;
+  spoofed, malformed, oversized and stale progress cannot change final results;
+  cancellation stops a stalled reporter without waiting for its timeout.
+- Rendering distinguishes import/verification from transfer, throttles updates,
+  preserves cleanup warnings, and avoids reporting unknown totals as zero.
+
+Linux arm64 and amd64 development binaries were rebuilt. Disposable test image
+tags are removed by the fixtures; no model/application is launched and no Docker
+daemon configuration changes are needed.

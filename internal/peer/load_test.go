@@ -13,11 +13,14 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/scitrera/oci-relay/internal/engine"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/client"
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/image"
@@ -59,6 +62,44 @@ func rawLayout(t *testing.T, size int) (string, *image.Image) {
 		t.Fatal(err)
 	}
 	return root, im
+}
+
+func TestLoadImporterVersionAndBackendQualification(t *testing.T) {
+	_, im := testutil.Layout(t, 4096) // Compressed input stops before any import.
+	for _, tc := range []struct {
+		version, os, driver, want string
+	}{
+		{"29.0.0", "linux", "overlay2", "uncompressed OCI layers"},
+		{"29.3.0", "linux", "overlay2", "uncompressed OCI layers"},
+		{"30.0.0", "linux", "overlay2", "uncompressed OCI layers"},
+		{"29.1.3-0ubuntu1~24.04.1", "linux", "overlay2", "uncompressed OCI layers"},
+		{"28.5.2", "linux", "overlay2", "Docker 29 or newer"},
+		{"unknown", "linux", "overlay2", "Docker 29 or newer"},
+		{"30.0.0", "windows", "overlay2", "Docker 29 or newer"},
+		{"30.0.0", "linux", "overlayfs", "Docker 29 or newer"},
+	} {
+		t.Run(tc.version+"/"+tc.os+"/"+tc.driver, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/info") {
+					t.Errorf("unexpected Docker request: %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{"ServerVersion": tc.version, "OSType": tc.os, "Driver": tc.driver})
+			}))
+			defer s.Close()
+			c, err := client.New(client.WithHost(s.URL), client.WithAPIVersion("1.52"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			handled, err := loadImage(context.Background(), &engine.Engine{Client: c}, im, nil, "fixture:unused", PullOptions{Import: "load"}, &Result{})
+			if !handled || err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("load qualification: handled=%v error=%v; want %s", handled, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestCachedPrefixRequiresEveryParent(t *testing.T) {
@@ -240,7 +281,7 @@ func TestRealDockerLoadCachedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer receiver.Close()
-	baseID, prefix, probeErr := cachedBase(ctx, e, child)
+	baseID, prefix, probeErr := cachedBase(ctx, e, child, nil)
 	if probeErr != nil || baseID == "" || prefix != 1 {
 		t.Fatalf("cached base selection: %s %d %v", baseID, prefix, probeErr)
 	}

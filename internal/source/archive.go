@@ -7,6 +7,7 @@ package source
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -53,8 +54,17 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 	if err != nil {
 		return nil, err
 	}
-	// Pin the immutable config ID so a moving tag cannot change the export.
+	// Pin the immutable Docker image ID so a moving tag cannot change the export.
 	id := inspected.ID
+	if inspected.Descriptor != nil {
+		if o.Platform.OS == "" {
+			o.Platform = v1.Platform{OS: inspected.Os, Architecture: inspected.Architecture, Variant: inspected.Variant}
+		}
+		inspected, err = eng.InspectPlatform(ctx, id, o.Platform)
+		if err != nil {
+			return nil, err
+		}
+	}
 	dir, err := os.MkdirTemp(o.SpoolDir, "oci-relay-archive-")
 	if err != nil {
 		return nil, err
@@ -109,12 +119,41 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 	if err = a.index(ctx); err != nil {
 		return nil, err
 	}
-	a.Image, err = image.LoadLayoutReader(a.read, "", o.Platform)
+	if inspected.Descriptor == nil {
+		a.Image, err = image.LoadLayoutReader(a.read, "", o.Platform)
+	} else {
+		// Exported indexes can retain attestations and other platforms. Resolve
+		// only the exact platform manifest already pinned by Docker inspection.
+		name, pathErr := image.BlobPath("", inspected.Descriptor.Digest)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		raw, readErr := a.read(name, image.MaxMetadata)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if err = image.Verify(raw, *inspected.Descriptor); err != nil {
+			return nil, err
+		}
+		var m v1.Manifest
+		if err = json.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+		name, pathErr = image.BlobPath("", m.Config.Digest)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		config, readErr := a.read(name, image.MaxMetadata)
+		if readErr != nil {
+			return nil, readErr
+		}
+		a.Image, err = image.Parse(raw, config, inspected.Descriptor.Digest, o.Platform)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Docker export must contain a single-platform OCI layout: %w", err)
 	}
-	if string(a.Image.Descriptors[0].Digest) != id {
-		return nil, errors.New("Docker export config does not match pinned image ID")
+	if (inspected.Descriptor == nil && string(a.Image.Descriptors[0].Digest) != id) || (inspected.Descriptor != nil && !engine.MatchesImage(inspected, a.Image)) {
+		return nil, errors.New("Docker export identity does not match pinned image")
 	}
 	for _, d := range a.Image.Descriptors {
 		name, _ := image.BlobPath("", d.Digest)

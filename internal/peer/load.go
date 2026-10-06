@@ -32,38 +32,16 @@ func commonPrefix(want []digest.Digest, have []string) int {
 	return min(len(want), len(have))
 }
 
-func cachedBase(ctx context.Context, e *engine.Engine, im *image.Image) (string, int, error) {
+func cachedBase(ctx context.Context, e *engine.Engine, im *image.Image, result *Result) (string, int, error) {
 	var config v1.Image
 	if err := json.Unmarshal(im.Config, &config); err != nil {
 		return "", 0, err
 	}
-	listed, err := e.Client.ImageList(ctx, client.ImageListOptions{})
-	if err != nil {
-		return "", 0, err
+	inv, err := e.Discover(ctx, engine.InventoryRequest{DiffIDs: config.RootFS.DiffIDs, Platform: im.Platform}, 10*time.Second, true)
+	if result != nil {
+		inventoryMetrics(result, inv)
 	}
-	best, id := 0, ""
-	// Bound public-API discovery on busy hosts. Unexamined images simply cannot
-	// contribute a cache hit; this never permits skipping unproven layers.
-	for _, candidate := range listed.Items[:min(len(listed.Items), 128)] {
-		info, err := e.Inspect(ctx, candidate.ID)
-		if errdefs.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return "", 0, err
-		}
-		if info.Os != im.Platform.OS || info.Architecture != im.Platform.Architecture {
-			continue
-		}
-		count := commonPrefix(config.RootFS.DiffIDs, info.RootFS.Layers)
-		if count > best {
-			best, id = count, info.ID
-		}
-		if best == len(config.RootFS.DiffIDs) {
-			break
-		}
-	}
-	return id, best, nil
+	return inv.Base, inv.Prefix, err
 }
 
 type archiveEntry struct {
@@ -171,12 +149,12 @@ func loadImage(ctx context.Context, e *engine.Engine, im *image.Image, cache *tr
 		return true, err
 	}
 	qualified := info.Info.OSType == "linux" && info.Info.Driver == "overlay2" &&
-		(info.Info.ServerVersion == "29.1.3" || info.Info.ServerVersion == "29.2.1")
+		engine.SupportsStoreVersion(info.Info.ServerVersion)
 	if !qualified {
 		if o.Import == "load-cached" {
 			return false, nil
 		}
-		return true, errors.New("load importer is qualified only on Docker 29.1.3/29.2.1 Linux overlay2")
+		return true, errors.New("load importer requires Docker 29 or newer on Linux overlay2")
 	}
 	for _, d := range im.Descriptors[1:] {
 		if d.MediaType != v1.MediaTypeImageLayer {
@@ -188,7 +166,7 @@ func loadImage(ctx context.Context, e *engine.Engine, im *image.Image, cache *tr
 	}
 	skip, base := 0, ""
 	if o.Import == "load-cached" {
-		base, skip, err = cachedBase(ctx, e, im)
+		base, skip, err = cachedBase(ctx, e, im, result)
 		if err != nil {
 			return true, err
 		}

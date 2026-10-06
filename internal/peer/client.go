@@ -27,6 +27,7 @@ type Client struct {
 	Credentials Credentials
 	HTTP        *http.Client
 	transport   *http.Transport
+	paths       *pathPool
 }
 
 func NewClient(endpoint string, c Credentials, conn net.Conn) (*Client, error) {
@@ -62,8 +63,19 @@ func NewClient(endpoint string, c Credentials, conn net.Conn) (*Client, error) {
 	}
 	return &Client{Endpoint: endpoint, Credentials: c, transport: t, HTTP: &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("relay redirects are forbidden") }}}, nil
 }
-func (c *Client) Close() { c.transport.CloseIdleConnections() }
+func (c *Client) Close() {
+	if c.paths != nil {
+		for _, p := range c.paths.paths {
+			p.client.Close()
+		}
+		return
+	}
+	c.transport.CloseIdleConnections()
+}
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	if c.paths != nil {
+		return c.pathRequest(ctx, method, path, body)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.Endpoint+path, body)
 	if err != nil {
 		return nil, err
@@ -103,16 +115,32 @@ func (c *Client) Image(ctx context.Context) (*image.Image, error) {
 	return &im, nil
 }
 func (c *Client) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error {
+	if c.paths != nil {
+		return c.fetchPath(ctx, d, w)
+	}
+	return c.fetch(ctx, d, w)
+}
+func (c *Client) fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error {
 	r, err := c.request(ctx, "GET", "/relay/v1/blobs/"+string(d.Digest), nil)
 	if err != nil {
-		return err
+		return transportError(err)
 	}
 	defer r.Body.Close()
 	if r.ContentLength != d.Size {
 		return errors.New("relay blob length mismatch")
 	}
-	_, err = io.CopyBuffer(w, io.LimitReader(r.Body, d.Size+1), make([]byte, 64<<10))
-	return err
+	written := &countWriter{writer: w}
+	n, err := io.CopyBuffer(written, io.LimitReader(r.Body, d.Size+1), make([]byte, 64<<10))
+	if written.err != nil {
+		return written.err
+	}
+	if err != nil {
+		return &pathError{err}
+	}
+	if n != d.Size {
+		return &pathError{io.ErrUnexpectedEOF}
+	}
+	return nil
 }
 func (c *Client) Report(ctx context.Context, result Result) error {
 	b, err := json.Marshal(result)

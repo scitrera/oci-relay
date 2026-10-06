@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from sparkrun_oci_relay.source_policy import LOCAL_DOCKER, SourceUnavailable, detect, select, validate
+from sparkrun_oci_relay.source_policy import LOCAL_DOCKER, SourceUnavailable, detect, select, store_version_supported, validate
 
 GIB = 1 << 30
 
@@ -23,6 +23,32 @@ def policy(**extra):
 
 def archive_policy():
     return dict(allow_native_store=False, allow_preparation_read=True, max_spool_bytes=32 * GIB, transport='http2-direct')
+
+
+@pytest.mark.parametrize('version', [
+    '29.0.0', '29.1.3', '29.2.1', '29.3.0', '30.0.0', '99.0.0',
+    'v29.1.3', '29.0.0-rc.1', '29.1.3+vendor.1', '29.1.3-0ubuntu1~24.04.1',
+])
+def test_docker29_and_later_automatically_select_native_and_archive(version):
+    assert store_version_supported(version)
+    facts = dict(store(), version=version)
+    assert select({}, facts, {}).mode == 'docker-classic'
+    assert select(archive_policy(), facts, {'network_gbps': 100}).mode == 'docker-save'
+    facts.update(driver='overlayfs', driver_status=[['driver-type', 'io.containerd.snapshotter.v1']])
+    assert select({}, facts, {}).mode == 'docker-containerd'
+
+
+@pytest.mark.parametrize('version', [
+    None, 29, [], '', 'unknown', '28.99.99', 'v28.1.0', '29', '29.2', '29.x.1',
+    '29.1.3garbage', '29.1.3\n', '29.1.3-', '+29.1.3',
+])
+def test_older_or_malformed_versions_use_public_source(version):
+    assert not store_version_supported(version)
+    facts = dict(store(), version=version)
+    assert select({}, facts, {}).mode == 'docker'
+    assert select(archive_policy(), facts, {'network_gbps': 100}).mode == 'docker'
+    facts.update(driver='overlayfs', driver_status=[['driver-type', 'io.containerd.snapshotter.v1']])
+    assert select({}, facts, {}).mode == 'docker'
 
 
 def test_default_auto_prefers_native_with_preparation_disabled():
@@ -44,7 +70,7 @@ def test_exact_manifest_wins_even_with_native_enabled():
 
 
 @pytest.mark.parametrize('changed', [
-    {'version': '29.3.0'}, {'driver': 'overlayfs'}, {'os': 'windows'},
+    {'version': '28.5.2'}, {'driver': 'overlayfs'}, {'os': 'windows'},
     {'security': ['name=rootless']}, {'security': ['name=userns']},
     {'security': None}, {'security': [None]}, {'runtimes': {}}, {'runtimes': None},
     {'root': 'relative'}, {'root': '/store,bad'},
@@ -134,6 +160,8 @@ def test_explicit_effective_speed_hint():
 
 
 @pytest.mark.parametrize('settings', [
+    {'cache_discovery_seconds': 0}, {'cache_discovery_seconds': 301},
+    {'cache_discovery_seconds': True}, {'cache_discovery_seconds': 0.5},
     {'source_mode': []}, {'source_mode': 'unknown'},
     {'allow_native_store': 'true'}, {'allow_preparation_read': 1},
     {'source_mode': 'docker-classic', 'manifest': '/m'},
@@ -213,3 +241,24 @@ def test_receiver_experiment_settings_accept_explicit_budgets():
     from sparkrun_oci_relay.source_policy import validate
     validate({'allow_native_store': True, 'receiver_import': 'load-cached',
               'max_import_bytes': 8 << 20, 'source_join_milliseconds': 250, 'relay_gomaxprocs': 4})
+
+
+def test_containerd_native_selection_qualification_and_opt_out():
+    from sparkrun_oci_relay.source_policy import containerd_store_reason, native_mounts
+
+    facts = dict(store(), version='29.2.1', driver='overlayfs',
+                 driver_status=[['driver-type', 'io.containerd.snapshotter.v1']])
+    assert containerd_store_reason(facts) is None
+    assert select({}, facts, {}).mode == 'docker-containerd'
+    assert select({'allow_native_store': False}, facts, {}).mode == 'docker'
+    assert containerd_store_reason(dict(facts, driver_status=[])) is not None
+    assert containerd_store_reason(dict(facts, version='28.5.2')) is not None
+    assert containerd_store_reason(dict(facts, security=['name=rootless'])) is not None
+    assert native_mounts(facts, {}) == [('/var/lib/docker/containerd/daemon/io.containerd.content.v1.content', '/oci-relay-store', True)]
+    assert native_mounts(dict(facts, containerd_address='/run/containerd/containerd.sock'), {}) == [('/var/lib/containerd/io.containerd.content.v1.content', '/oci-relay-store', True)]
+    assert native_mounts(facts, {'containerd_content_root': '/custom/content'}) == [('/custom/content', '/oci-relay-store', True)]
+    with pytest.raises(SourceUnavailable):
+        validate({'source_mode': 'docker-containerd', 'allow_native_store': False})
+    for path in ['relative', '/bad,bind', '/bad\npath']:
+        with pytest.raises(ValueError):
+            validate({'containerd_content_root': path})

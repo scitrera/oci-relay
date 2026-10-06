@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_explicit_vendoring_installs_bindings_and_refuses_tampering(tmp_path):
     core = tmp_path / 'src/sparkrun/core'
     core.mkdir(parents=True)
-    (core / 'image_distribution.py').write_text('IMAGE_DISTRIBUTION_API_VERSION = 1\n')
+    (core / 'image_distribution.py').write_text('IMAGE_DISTRIBUTION_API_VERSION = 1\nIMAGE_PULL_API_VERSION = 1\n')
     (core / 'features.py').write_text('registered = []\ndef FeatureFlag(**kw): return kw\ndef register_feature(f): registered.append(f)\n')
     (core / 'in_tree_plugins.py').write_text('IN_TREE_PLUGIN_FEATURES = {}\n')
     (tmp_path / 'pyproject.toml').write_text('[project]\nname = "fixture"\n[tool.setuptools.package-data]\n[tool.ruff]\nextend-exclude = ["other"]\n')

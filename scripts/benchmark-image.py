@@ -4,9 +4,10 @@
 # Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
 """Compare a local image copy into an explicitly supplied empty test Docker store.
 
-Requires Sparkrun develop-next and this plugin on PYTHONPATH. The caller owns
+Use the dev environment with Sparkrun develop-next and this plugin. The caller owns
 creation/removal of the isolated receiver daemon. Never point this at a normal
 host daemon. No image removal or cache pruning is performed by this script.
+The transfer method verifies all blobs without using a receiver Docker daemon.
 """
 
 import argparse
@@ -23,6 +24,7 @@ from types import SimpleNamespace
 from sparkrun.transports.session import SshHostSession
 from sparkrun_oci_relay import __version__
 from sparkrun_oci_relay.host import Lines, Runner
+from sparkrun_oci_relay.paths import arguments as path_arguments, qualify as qualify_paths
 from sparkrun_oci_relay.tuning import limits, probe
 
 
@@ -36,7 +38,7 @@ class BenchmarkSession(SshHostSession):
 
     def open_process(self, host, arguments):
         command = arguments[2:] if arguments[:1] == ["env"] and arguments[1].startswith("GOMAXPROCS=") else arguments
-        if host in self.receiver_hosts and len(command) > 1 and command[1] == "peer" and "--check" not in command:
+        if self.receiver_docker_host and host in self.receiver_hosts and len(command) > 1 and command[1] == "peer" and "--check" not in command:
             arguments = [*arguments, "--docker-host", self.receiver_docker_host]
         return super().open_process(host, arguments)
 
@@ -56,12 +58,14 @@ class ProviderObservations(logging.Handler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("method", choices=["builtin", "relay", "provider"],
+    parser.add_argument("method", choices=["builtin", "relay", "provider", "transfer"],
                         help="provider includes plugin binary checks, discovery, preflight and cleanup")
     parser.add_argument("--image", required=True, help="local image reference; this script never pulls it")
     parser.add_argument("--host", required=True, action="append", help="receiver management address; repeat for fan-out")
     parser.add_argument("--transfer-host", required=True, action="append", help="one data address per --host, in order")
-    parser.add_argument("--receiver-docker-host", required=True, help="isolated unix:///tmp/.../docker.sock")
+    parser.add_argument("--receiver-docker-host", help="isolated unix:///tmp/.../docker.sock; omit for transfer")
+    parser.add_argument("--data-paths", help="private JSON file containing plugin data_paths host-to-IP maps")
+    parser.add_argument("--connections-per-path", type=int, choices=range(1, 5), default=1)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--manifest", help="omit to measure full preparation read")
     parser.add_argument("--layout", help="pre-exported OCI layout instead of the Docker push source")
@@ -77,14 +81,21 @@ def main():
     parser.add_argument("--timeout", type=int, default=3600)
     parser.add_argument("--warm", action="store_true", help="permit cached images in the isolated benchmark store")
     args = parser.parse_args()
-    if not args.receiver_docker_host.startswith("unix:///tmp/oci-relay-benchmark."):
+    if args.method != "transfer" and not (args.receiver_docker_host or "").startswith("unix:///tmp/oci-relay-benchmark."):
         parser.error("receiver must be an explicitly isolated benchmark Docker socket")
+    if args.method == "transfer" and args.receiver_docker_host:
+        parser.error("transfer-only does not use a receiver Docker socket")
+    if args.method == "builtin" and args.data_paths:
+        parser.error("builtin does not support data_paths")
     if len(args.host) != len(args.transfer_host) or len(set(args.host)) != len(args.host):
         parser.error("provide unique management hosts and an equal number of transfer addresses")
     if args.source_mode == "auto" and args.method != "provider":
         parser.error("auto source policy requires the provider method")
     if args.layout and args.method == "provider":
         parser.error("the provider does not accept pre-exported layouts")
+    if args.connections_per_path != 1 and args.method != "transfer" and not args.data_paths:
+        parser.error("multiple connections require explicit data_paths (or transfer mode)")
+    operation_started = time.monotonic()
     session = BenchmarkSession(args.host, args.receiver_docker_host)
     runner = Runner(session, {"relay_gomaxprocs": args.relay_gomaxprocs})
     receiver_docker = ["docker", "--host", args.receiver_docker_host]
@@ -92,7 +103,7 @@ def main():
         ["docker", "image", "inspect", "--format={{.Id}}", args.image], text=True,
     ).strip()
     infos = {}
-    for host in args.host:
+    for host in ([] if args.method == "transfer" else args.host):
         info = json.loads(runner.execute(host, receiver_docker + ["info", "--format={{json .}}"] ))
         if (info["Images"] and not args.warm) or info["Containers"] or info["Driver"] != "overlay2":
             raise RuntimeError("receiver must be an empty overlay2 benchmark store (or explicitly --warm)")
@@ -102,11 +113,13 @@ def main():
         "host": args.host, "transfer_host": args.transfer_host,
         "receiver_engines": infos, "supplied_manifest": bool(args.manifest),
         "source_mode": "oci-layout" if args.layout else args.source_mode,
-        "cache_state": "warm" if args.warm else "cold",
+        "cache_state": "not-imported" if args.method == "transfer" else "warm" if args.warm else "cold",
         "source_join_milliseconds": args.source_join_milliseconds,
-        "receiver_import": args.receiver_import,
+        "receiver_import": "none" if args.method == "transfer" else args.receiver_import,
         "relay_gomaxprocs": args.relay_gomaxprocs, "source_streams_override": args.source_streams,
+        "connections_per_path": args.connections_per_path,
     }
+    maps = json.loads(Path(args.data_paths).read_text()) if args.data_paths else None
     stop_heartbeat = threading.Event()
     started = None
     try:
@@ -142,6 +155,9 @@ def main():
                 settings["source_streams"] = args.source_streams
             if args.manifest:
                 settings["manifest"] = str(Path(args.manifest).resolve())
+            if maps is not None:
+                settings["data_paths"] = maps
+                settings["connections_per_path"] = args.connections_per_path
             request = ImageCopyRequest(
                 image=args.image, source_host=None, targets=tuple(args.host), transfer_hosts=tuple(args.transfer_host),
                 timeout=args.timeout, offline=True, session=session,
@@ -169,6 +185,35 @@ def main():
             source_facts = probe(runner, None, args.transfer_host[0])
             address = source_facts["source_address"]
             target_facts = {host: probe(runner, host, address) for host in args.host}
+            data_paths = {}
+            if maps is not None:
+                all_facts = {None: source_facts, **target_facts}
+                for host in args.host:
+                    data_paths[host] = qualify_paths(runner, None, host, maps, all_facts)
+                    if len(data_paths[host]) != len(maps):
+                        raise RuntimeError("benchmark requires every configured path to qualify")
+            elif args.method == "transfer":
+                data_paths = {host: [{"source": address, "local": target_facts[host]["source_address"],
+                                     "source_device": source_facts["interface"],
+                                     "target_device": target_facts[host]["interface"]}] for host in args.host}
+
+            def interface_counters():
+                devices = {None: set(), **{host: set() for host in args.host}}
+                for host, paths in data_paths.items():
+                    for path in paths:
+                        devices[None].add(path["source_device"])
+                        devices[host].add(path["target_device"])
+                counters = {}
+                for host, names in devices.items():
+                    counters[host or "controller"] = {}
+                    for device in sorted(names):
+                        raw = runner.execute(host, ["cat", *[f"/sys/class/net/{device}/statistics/{kind}_bytes"
+                                                            for kind in ("rx", "tx")]])
+                        rx, tx = map(int, raw.split())
+                        counters[host or "controller"][device] = {"rx_bytes": rx, "tx_bytes": tx}
+                return counters
+
+            result["interface_counters_before"] = interface_counters()
             tuning = {"network_gbps": args.network_gbps} if args.network_gbps is not None else {}
             if args.source_streams is not None:
                 tuning["source_streams"] = args.source_streams
@@ -226,8 +271,11 @@ def main():
                 receivers = {}
                 for host in args.host:
                     receiver = runner.start(host, [
-                        remote_binaries[host], "peer", "--endpoint", ready["endpoint"], "--session", credential_files[host],
-                        "--docker-host", args.receiver_docker_host, "--tag", args.image,
+                        remote_binaries[host], "peer", *(path_arguments(data_paths[host],
+                            int(ready["endpoint"].rsplit(":", 1)[1])) if host in data_paths else ["--endpoint", ready["endpoint"]]),
+                        "--session", credential_files[host],
+                        *(["--connections-per-path", str(args.connections_per_path)] if host in data_paths else []),
+                        *(["--transfer-only"] if args.method == "transfer" else ["--docker-host", args.receiver_docker_host, "--tag", args.image]),
                         "--max-buffer-bytes", str(target_limits[host]["max_buffer_bytes"]),
                         "--max-source-streams", str(target_limits[host]["source_streams"]),
                         "--timeout-seconds", str(args.timeout),
@@ -249,20 +297,23 @@ def main():
                 result["copy_seconds"] = time.monotonic() - copy_start
                 result["relay_result"] = final
                 codes = [receiver.wait(timeout=15) for receiver, _ in receivers.values()]
-                if final.get("state") != "COMPLETE" or any(codes) or source.wait(timeout=15):
+                expected = "VERIFIED" if args.method == "transfer" else "COMPLETE"
+                if final.get("state") != expected or any(codes) or source.wait(timeout=15):
                     raise RuntimeError("relay did not complete: " + json.dumps(final))
             except Exception as error:
                 raise RuntimeError(str(error) + "\n" + "\n".join(source_errors.tail)) from error
         result["total_seconds"] = time.monotonic() - started
+        if args.method not in {"builtin", "provider"}:
+            result["interface_counters_after"] = interface_counters()
         result["received_ids"] = {}
-        for host in args.host:
+        for host in ([] if args.method == "transfer" else args.host):
             received = runner.execute(host, receiver_docker + [
                 "image", "inspect", "--format={{.Id}}", args.image,
             ]).decode().strip()
             result["received_ids"][host] = received
             if received != source_id:
                 raise RuntimeError("receiver identity does not match source")
-        result["state"] = "COMPLETE"
+        result["state"] = "VERIFIED" if args.method == "transfer" else "COMPLETE"
     except BaseException as error:
         result["state"] = "FAILED"
         result["error"] = str(error)
@@ -273,6 +324,7 @@ def main():
         stop_heartbeat.set()
         result["cleanup_errors"] = runner.close()
         session.close()
+        result["operation_seconds"] = time.monotonic() - operation_started
         Path(args.output).write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result), flush=True)
 

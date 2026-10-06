@@ -86,7 +86,7 @@ def test_native_source_qualification_and_cleanup():
     assert runner.close() == []
     assert calls[-1] == LOCAL_DOCKER + ['rm', '--force', '--volumes', runner.containers[0][1]]
     calls.clear()
-    info['version'] = '99.0.0'
+    info['version'] = '28.5.2'
     with pytest.raises(ImageDistributionUnsupported):
         runner.start_source(None, '/verified/relay', '/tmp/oci-relay.0123456789',
                             {'source': 'docker-classic', 'image': 'fixture:latest'})
@@ -152,3 +152,63 @@ def test_relay_runtime_tuning_does_not_wrap_docker_cli():
     runner.start('host', LOCAL_DOCKER + ['start', '--attach', 'owned-container'])
     assert calls[0] == ['env', 'GOMAXPROCS=4', '/verified/relay', 'peer']
     assert calls[1] == LOCAL_DOCKER + ['start', '--attach', 'owned-container']
+
+
+@pytest.mark.parametrize('store', ['overlay2', 'containerd'])
+@pytest.mark.parametrize('version', ['29.0.0', '29.2.1', '30.0.0', '29.1.3-0ubuntu1~24.04.1'])
+def test_receiver_helper_requires_matching_chain_and_only_mounts_local_store(store, version):
+    import json
+    from sparkrun_oci_relay.host import LOCAL_DOCKER, Runner
+
+    runner = Runner.__new__(Runner)
+    runner.settings, runner.containers, runner.processes = {}, [], []
+    calls = []
+    image_id = 'sha256:' + 'a' * 64
+    info = {'version': version, 'driver': 'overlayfs' if store == 'containerd' else 'overlay2',
+            'driver_status': [['driver-type', 'io.containerd.snapshotter.v1']] if store == 'containerd' else [],
+            'root': '/var/lib/docker', 'os': 'linux', 'security': [], 'runtimes': {'runc': {}}}
+    layers = ['sha256:' + 'b' * 64]
+
+    def execute(host, args, **kwargs):
+        calls.append(args)
+        if args[:4] == LOCAL_DOCKER + ['info']:
+            return json.dumps(info).encode()
+        if args[:2] == ['/verified/relay', 'inventory']:
+            request = json.loads(kwargs['input_data'])
+            matched = request['diff_ids'] == layers
+            return json.dumps(dict(request, helper_image=image_id, candidates=[image_id] if matched else [],
+                                   base=image_id if matched else '', prefix=int(matched), complete=True,
+                                   images_listed=1, images_inspected=1, seconds=0.01,
+                                   stop_reason='all_layers_found' if matched else 'all_images_scanned')).encode()
+        if args[:4] == LOCAL_DOCKER + ['create']:
+            return b'c' * 64
+        raise AssertionError(args)
+
+    runner.execute = execute
+    inventories = []
+    runner.json = lambda host, path, value: inventories.append((path, value))
+    runner.start = lambda host, args: calls.append(args)
+    args = ['/verified/relay', 'peer', '--stdio']
+    inventory = {'diff_ids': layers.copy(), 'platform': {'os': 'linux', 'architecture': 'arm64'}}
+    runner.start_receiver('host', args[0], '/tmp/oci-relay.0123456789', args, inventory)
+    create = next(a for a in calls if a[:4] == LOCAL_DOCKER + ['create'])
+    assert '--privileged' not in create and '--read-only' in create
+    assert create[create.index('--engine-version') + 1] == version
+    assert create[-2:] == ['--native-base', image_id]
+    mounts = [create[i + 1] for i, value in enumerate(create) if value == '--mount']
+    assert all(m.endswith(',readonly') for m in mounts)
+    assert any('src=/var/run/docker.sock,dst=/var/run/docker.sock' in m for m in mounts)
+    assert len(runner.containers) == 1
+    calls.clear()
+    layers[0] = 'sha256:' + 'd' * 64
+    runner.start_receiver('host', args[0], '/tmp/oci-relay.0123456789', args, inventory)
+    if store == 'overlay2':
+        assert calls[-1] == [*args, '--cache-inventory', '/tmp/oci-relay.0123456789/cache-inventory.json']
+        assert not any(a[:4] == LOCAL_DOCKER + ['create'] for a in calls)
+    else:
+        assert any(a[:4] == LOCAL_DOCKER + ['create'] for a in calls), 'containerd probes CAS without image matches'
+    assert inventories[-1][1]['complete']
+    calls.clear()
+    runner.settings['allow_native_store'] = False
+    runner.start_receiver('host', args[0], '/tmp/oci-relay.0123456789', args, inventory)
+    assert calls == [args]

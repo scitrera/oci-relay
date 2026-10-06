@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	digest "github.com/opencontainers/go-digest"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/image"
 	"github.com/scitrera/oci-relay/internal/testutil"
@@ -192,5 +194,44 @@ func TestArchiveRejectsUnsafeAndDuplicateEntries(t *testing.T) {
 				t.Fatal("invalid archive accepted")
 			}
 		})
+	}
+}
+
+func TestContainerdArchivePinsPlatformManifestInsteadOfConfigID(t *testing.T) {
+	data, im := archiveFixture(t)
+	rootID := string(digest.FromString("pinned-index"))
+	var cfg v1.Image
+	_ = json.Unmarshal(im.Config, &cfg)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/json") {
+			id := rootID
+			desc := v1.Descriptor{Digest: digest.Digest(id), MediaType: v1.MediaTypeImageIndex, Size: 100}
+			if r.URL.Query().Get("platform") != "" {
+				id = string(im.Digest)
+				desc = v1.Descriptor{Digest: im.Digest, MediaType: im.MediaType, Size: int64(len(im.Manifest))}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "Descriptor": desc, "Os": im.Platform.OS, "Architecture": im.Platform.Architecture, "RootFS": map[string]any{"Type": "layers", "Layers": cfg.RootFS.DiffIDs}})
+		} else if strings.HasSuffix(r.URL.Path, "/images/get") {
+			if r.URL.Query().Get("names") != rootID {
+				t.Error("export lost the pinned index reference")
+			}
+			_, _ = w.Write(data)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cli, err := client.New(client.WithHost(server.URL), client.WithAPIVersion("1.52"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	archive, err := NewArchive(context.Background(), &engine.Engine{Client: cli}, ArchiveOptions{Reference: "fixture", MaxSpool: 8 << 20, SpoolDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if archive.Image.Digest != im.Digest || archive.Image.Descriptors[0].Digest != im.Descriptors[0].Digest {
+		t.Fatal("wrong containerd export identity")
 	}
 }

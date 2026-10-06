@@ -101,19 +101,30 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type PullOptions struct {
-	DockerHost string
-	Tag        string
-	ReplaceTag bool
-	Memory     int64
-	Parallel   int
-	Retries    int
-	Import     string
-	MaxImport  int64
+	SkipPresent   bool
+	DockerHost    string
+	Tag           string
+	ReplaceTag    bool
+	Memory        int64
+	Parallel      int
+	Retries       int
+	Import        string
+	MaxImport     int64
+	NativeStore   string
+	NativeBase    string
+	NativeRoot    string
+	EngineVersion string
+	Inventory     *engine.Inventory
 }
 
 func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err error) {
 	result = Result{Version: ProtocolVersion, Transfer: c.Credentials.Transfer, Peer: c.Credentials.Peer, State: "FAILED", Tag: o.Tag}
+	progress := newReceiverProgress(ctx, c)
 	defer func() {
+		progress.close()
+		observation := progress.snapshot()
+		result.Progress = &observation
+		result.Paths = c.PathMetrics()
 		if err != nil {
 			result.Error = err.Error()
 			if ctx.Err() != nil {
@@ -153,12 +164,56 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	}
 	defer e.Close()
 	target := string(im.Descriptors[0].Digest)
+	result.ConfigDigest = target
+	if o.Inventory != nil {
+		if err = validateInventory(o.Inventory, im); err != nil {
+			return result, err
+		}
+		inventoryMetrics(&result, *o.Inventory)
+	}
+	result.Store, err = qualifyReceiver(ctx, e, o)
+	if err != nil {
+		return result, err
+	}
+	matches := func(ref string) (bool, string, error) {
+		info, inspectErr := e.InspectPlatform(ctx, ref, im.Platform)
+		if inspectErr != nil {
+			return false, "", inspectErr
+		}
+		if engine.MatchesImage(info, im) {
+			return true, info.ID, nil
+		}
+		if o.NativeStore == "containerd" {
+			local, localErr := openLocal(ctx, o, info.ID, im.Platform)
+			if localErr != nil {
+				return false, info.ID, localErr
+			}
+			defer local.close()
+			return local.im.Descriptors[0].Digest == im.Descriptors[0].Digest, info.ID, nil
+		}
+		return false, info.ID, nil
+	}
+	if o.SkipPresent {
+		// Resolve metadata first, then trust only Docker's immutable image identity
+		// and matching platform. No upstream layer acquisition is necessary here.
+		same, runtimeID, inspectErr := matches(o.Tag)
+		if inspectErr == nil && same {
+			result.State, result.ImageID, result.AlreadyPresent = "COMPLETE", target, true
+			result.DockerImageID = runtimeID
+			result.ImportMethod = "none"
+			return result, nil
+		}
+		if inspectErr != nil && !errdefs.IsNotFound(inspectErr) {
+			return result, inspectErr
+		}
+
+	}
 	checkTag := func() error {
-		existing, inspectErr := e.Inspect(ctx, o.Tag)
+		same, _, inspectErr := matches(o.Tag)
 		if inspectErr != nil && !errdefs.IsNotFound(inspectErr) {
 			return inspectErr
 		}
-		if inspectErr == nil && existing.ID != target && !o.ReplaceTag {
+		if inspectErr == nil && !same && !o.ReplaceTag {
 			return errors.New("destination tag conflicts; enable explicit replacement")
 		}
 		return nil
@@ -166,7 +221,19 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	if err = checkTag(); err != nil {
 		return result, err
 	}
-	cache, err := transfer.New(ctx, c, o.Memory, o.Parallel)
+	progress.phase("discovering")
+	view, src, cleanupLocal, err := receiverView(ctx, e, c, im, o, &result)
+	defer func() { progress.phase("cleanup"); cleanupLocal() }()
+	if err != nil {
+		return result, err
+	}
+	result.InstalledManifest = string(view.Digest)
+	if err = c.NegotiateLayers(ctx, im, view, result.Store, result.ReusedLayers, src.availability); err != nil {
+		return result, err
+	}
+	progress.plan(view.Descriptors[1:], src.local, result.ReusedLayers+result.CachedBlobLayers)
+	src.remote = progressSource{source: src.remote, progress: progress}
+	cache, err := transfer.New(ctx, src, o.Memory, o.Parallel)
 	if err != nil {
 		return result, err
 	}
@@ -176,11 +243,12 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 		return result, err
 	}
 	repo := "relay/" + c.Credentials.Transfer
-	server := &http.Server{Handler: NewRegistry(im, cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: NewRegistry(view, cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
 	tempTag := listener.Addr().String() + "/" + repo + ":transfer"
 	defer func() {
+		progress.phase("cleanup")
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if cleanupErr := e.RemoveTag(cleanup, tempTag); cleanupErr != nil && !errdefs.IsNotFound(cleanupErr) {
@@ -191,7 +259,8 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	pullStart := time.Now()
 	loaded := false
 	if o.Import != "pull" {
-		loaded, err = loadImage(ctx, e, im, cache, tempTag, o, &result)
+		progress.phase("importing")
+		loaded, err = loadImage(ctx, e, view, cache, tempTag, o, &result)
 		result.PullSeconds = time.Since(pullStart).Seconds()
 		if err != nil {
 			return result, fmt.Errorf("receiver Docker load: %w", err)
@@ -207,6 +276,8 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 				result.LastDownloadSeconds = time.Since(pullStart).Seconds()
 			case "Pull complete":
 				result.LastExtractSeconds = time.Since(pullStart).Seconds()
+			case "Extracting":
+				progress.phase("importing")
 			}
 		})
 		result.PullSeconds = time.Since(pullStart).Seconds()
@@ -229,11 +300,12 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	if err != nil {
 		return result, fmt.Errorf("receiver Docker pull: %w", err)
 	}
-	pulled, err := e.Inspect(ctx, tempTag)
+	progress.phase("verifying")
+	pulled, err := e.InspectPlatform(ctx, tempTag, view.Platform)
 	if err != nil {
 		return result, err
 	}
-	if pulled.ID != target || pulled.Os != im.Platform.OS || pulled.Architecture != im.Platform.Architecture {
+	if !engine.MatchesImage(pulled, view) {
 		return result, errors.New("pulled image identity/platform mismatch")
 	}
 	if err = checkTag(); err != nil {
@@ -242,17 +314,18 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	if err = e.Tag(ctx, pulled.ID, o.Tag); err != nil {
+	if err = e.Tag(ctx, tempTag, o.Tag); err != nil {
 		return result, err
 	}
-	final, err := e.Inspect(ctx, o.Tag)
+	final, err := e.InspectPlatform(ctx, o.Tag, view.Platform)
 	if err != nil {
 		return result, err
 	}
 	if final.ID != pulled.ID {
 		return result, errors.New("destination tag changed during finalization")
 	}
-	result.ImageID = final.ID
+	result.ImageID = target
+	result.DockerImageID = final.ID
 	result.State = "COMPLETE"
 	return result, nil
 }

@@ -8,6 +8,15 @@ The executable directly imports Dragonfly's `pkg/stats.RollingWindow` from
 pseudo-version in go.mod. Dragonfly is Apache-2.0 software from the Dragonfly
 Authors. No Dragonfly daemon, scheduler, manager or database is embedded.
 
+`internal/source/registry_reference.go` adapts the small reference normalization
+and URL-construction portion of Dragonfly's `pkg/oci/image.go` and `reference.go`
+at commit `41b312389c90e4f3c44adde8bbd8aa11888076d4`, retaining its Apache-2.0
+license and attribution. Importing the whole OCI package would also link a
+legacy Docker daemon module flagged by the vulnerability scanner. The bounded
+registry resolver, credential handling, streaming and disk cache are relay code.
+The HTTP authentication challenge parser is directly reused from
+`github.com/docker/distribution/registry/client/auth/challenge` (Apache-2.0).
+
 It also directly uses Scitrera's `go-backpressure` semaphore, the Moby Engine
 client, OCI image/digest types, and their linked dependencies. Exact versions
 are in go.mod/go.sum; linked module license/notice texts are collected in

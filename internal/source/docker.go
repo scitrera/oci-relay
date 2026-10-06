@@ -45,6 +45,7 @@ type Docker struct {
 	cancel           context.CancelFunc
 	engine           *engine.Engine
 	opts             DockerOptions
+	platformPush     bool
 	server           *http.Server
 	listener         net.Listener
 	repo             string
@@ -121,7 +122,7 @@ func NewDocker(ctx context.Context, eng *engine.Engine, o DockerOptions) (s *Doc
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s = &Docker{ctx: ctx, cancel: cancel, engine: eng, opts: o, listener: listener, dir: dir, repo: "relay/" + randomID(), known: map[digest.Digest]v1.Descriptor{}, uploads: map[string]*upload{}, demands: map[digest.Digest]*demand{}, wake: make(chan struct{}, 1), done: make(chan struct{}), uploadSlots: make(chan struct{}, 4), spoolSlots: make(chan struct{}, min(4, int(o.MaxSpool/o.MaxUpload)))}
+	s = &Docker{ctx: ctx, cancel: cancel, engine: eng, opts: o, platformPush: inspected.Descriptor != nil, listener: listener, dir: dir, repo: "relay/" + randomID(), known: map[digest.Digest]v1.Descriptor{}, uploads: map[string]*upload{}, demands: map[digest.Digest]*demand{}, wake: make(chan struct{}, 1), done: make(chan struct{}), uploadSlots: make(chan struct{}, 4), spoolSlots: make(chan struct{}, min(4, int(o.MaxSpool/o.MaxUpload)))}
 	s.tag = listener.Addr().String() + "/" + s.repo + ":transfer"
 	s.server = &http.Server{Handler: s, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10}
 	go func() { _ = s.server.Serve(listener) }()
@@ -142,7 +143,7 @@ func NewDocker(ctx context.Context, eng *engine.Engine, o DockerOptions) (s *Doc
 		s.mu.Lock()
 		s.preparing = true
 		s.mu.Unlock()
-		err = eng.Push(ctx, s.tag)
+		err = s.push(ctx)
 		s.mu.Lock()
 		s.preparing = false
 		s.mu.Unlock()
@@ -160,7 +161,7 @@ func NewDocker(ctx context.Context, eng *engine.Engine, o DockerOptions) (s *Doc
 	if m.SchemaVersion != 2 || (m.MediaType != v1.MediaTypeImageManifest && m.MediaType != image.DockerManifest) || len(m.Layers) >= image.MaxDescriptors {
 		return nil, errors.New("Docker source did not produce a supported platform image")
 	}
-	if string(m.Config.Digest) != inspected.ID {
+	if inspected.Descriptor == nil && string(m.Config.Digest) != inspected.ID {
 		return nil, errors.New("manifest config digest does not match pinned local Docker image")
 	}
 	s.known = map[digest.Digest]v1.Descriptor{}
@@ -180,8 +181,24 @@ func NewDocker(ctx context.Context, eng *engine.Engine, o DockerOptions) (s *Doc
 		return nil, fmt.Errorf("acquire exact Docker config: %w", err)
 	}
 	s.Image, err = image.Parse(s.raw, cfg.Bytes(), "", o.Platform)
+	if err == nil && inspected.Descriptor != nil {
+		pinned, inspectErr := eng.InspectPlatform(ctx, inspected.ID, o.Platform)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if !engine.MatchesImage(pinned, s.Image) {
+			return nil, errors.New("pushed manifest does not match pinned containerd platform image")
+		}
+	}
 	return s, err
 }
+func (s *Docker) push(ctx context.Context) error {
+	if s.platformPush {
+		return s.engine.Push(ctx, s.tag, s.opts.Platform)
+	}
+	return s.engine.Push(ctx, s.tag)
+}
+
 func randomID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -282,7 +299,7 @@ func (s *Docker) schedule() {
 				cancelRound()
 			}))
 		}
-		err := s.engine.Push(roundContext, s.tag)
+		err := s.push(roundContext)
 		for _, stop := range stops {
 			stop()
 		}

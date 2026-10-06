@@ -23,6 +23,14 @@ import (
 )
 
 type Result struct {
+	Progress *ReceiverProgress `json:"progress,omitempty"`
+	// ImageID is the protocol-1 config-digest identity, not Docker's backend ID.
+	ConfigDigest        string           `json:"config_digest,omitempty"`
+	DockerImageID       string           `json:"docker_image_id,omitempty"`
+	InstalledManifest   string           `json:"installed_manifest_digest,omitempty"`
+	Store               string           `json:"store,omitempty"`
+	LocalBytes          int64            `json:"local_bytes"`
+	AlreadyPresent      bool             `json:"already_present,omitempty"`
 	Version             int              `json:"version"`
 	Transfer            string           `json:"transfer"`
 	Peer                string           `json:"peer"`
@@ -38,24 +46,37 @@ type Result struct {
 	LastExtractSeconds  float64          `json:"last_extract_seconds"`
 	ImportMethod        string           `json:"import_method"`
 	ReusedLayers        int              `json:"reused_layers"`
+	CachedBlobLayers    int              `json:"cached_blob_layers"`
+	DiscoverySeconds    float64          `json:"discovery_seconds"`
+	DiscoveryImages     int              `json:"discovery_images"`
+	DiscoveryInspected  int              `json:"discovery_inspected"`
+	DiscoveryComplete   bool             `json:"discovery_complete"`
+	DiscoveryStopReason string           `json:"discovery_stop_reason,omitempty"`
+	DiscoveryStale      int              `json:"discovery_stale"`
+	CacheProbeSeconds   float64          `json:"cache_probe_seconds"`
+	CacheProbeLimited   bool             `json:"cache_probe_limited"`
 	ImportArchiveBytes  int64            `json:"import_archive_bytes"`
 	LoadSeconds         float64          `json:"load_seconds"`
+	TransferSeconds     float64          `json:"transfer_seconds,omitempty"`
+	Paths               []PathMetrics    `json:"paths,omitempty"`
 }
 type Server struct {
-	Session   *Session
-	Image     *image.Image
-	Cache     *transfer.Cache
-	HTTP      *http.Server
-	Listener  net.Listener
-	Socket    string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	streams   chan struct{}
-	mu        sync.Mutex
-	results   map[string]Result
-	lastLease atomic.Int64
-	lease     time.Duration
-	done      chan struct{}
+	Session          *Session
+	Image            *image.Image
+	Cache            *transfer.Cache
+	HTTP             *http.Server
+	Listener         net.Listener
+	Socket           string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	streams          chan struct{}
+	mu               sync.Mutex
+	results          map[string]Result
+	agreements       map[string]agreement
+	receiverProgress map[string]ReceiverProgress
+	lastLease        atomic.Int64
+	lease            time.Duration
+	done             chan struct{}
 }
 
 func NewServer(ctx context.Context, sess *Session, im *image.Image, cache *transfer.Cache, bind, socket string, lease time.Duration) (*Server, error) {
@@ -145,6 +166,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/relay/v1/progress":
+		s.progress(w, r, id)
+		return
+	case "/relay/v1/negotiate":
+		s.negotiate(w, r, id)
+		return
 	case "/relay/v1/heartbeat":
 		if id != "manager" || r.Method != http.MethodPost {
 			http.Error(w, "manager POST required", 403)
@@ -164,15 +191,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var result Result
-		if json.Unmarshal(raw, &result) != nil || result.Version != ProtocolVersion || result.Transfer != s.Session.Source.Transfer || result.Peer != id || (result.State != "COMPLETE" && result.State != "FAILED" && result.State != "CANCELLED") {
+		if json.Unmarshal(raw, &result) != nil || result.Version != ProtocolVersion || result.Transfer != s.Session.Source.Transfer || result.Peer != id || (result.State != "COMPLETE" && result.State != "VERIFIED" && result.State != "FAILED" && result.State != "CANCELLED") {
 			http.Error(w, "invalid result", 400)
 			return
 		}
-		if result.State == "COMPLETE" && (result.Manifest != string(s.Image.Digest) || result.ImageID != string(s.Image.Descriptors[0].Digest) || result.Tag == "" || result.Error != "") {
+		if result.State == "COMPLETE" && (result.Manifest != string(s.Image.Digest) || result.ImageID != string(s.Image.Descriptors[0].Digest) || (result.ConfigDigest != "" && result.ConfigDigest != result.ImageID) || result.Tag == "" || result.Error != "") {
 			http.Error(w, "incomplete success result", 400)
 			return
 		}
+		if result.State == "VERIFIED" {
+			descriptors := uniqueDescriptors(s.Image)
+			var size int64
+			for _, d := range descriptors {
+				size += d.Size
+			}
+			if result.Manifest != string(s.Image.Digest) || result.ImageID != "" || result.Tag != "" || result.Error != "" || result.ImportMethod != "none" || result.Metrics.VerifiedBytes != size || result.Metrics.VerifiedBlobs != int64(len(descriptors)) {
+				http.Error(w, "incomplete verification result", 400)
+				return
+			}
+		}
 		s.mu.Lock()
+		if result.State == "COMPLETE" && result.InstalledManifest != "" && string(s.agreements[id].Manifest) != result.InstalledManifest {
+			s.mu.Unlock()
+			http.Error(w, "installed representation was not negotiated", 400)
+			return
+		}
 		if _, exists := s.results[id]; exists {
 			s.mu.Unlock()
 			http.Error(w, "receiver already finalized", 409)

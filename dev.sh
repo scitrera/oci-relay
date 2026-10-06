@@ -49,7 +49,7 @@ _oci_relay_dev_setup() {
     uv pip install --python "$venv_dir/bin/python" --editable "$checkout" \
         --editable "$script_dir[test]" 'ruff==0.15.6' || return 1
     uv pip check --python "$venv_dir/bin/python" || return 1
-    "$venv_dir/bin/python" -c 'import sys; from pathlib import Path; import sparkrun, sparkrun.plugins as p; assert p.IMAGE_DISTRIBUTION_API_VERSION == 1; assert Path(sparkrun.__file__).resolve() == Path(sys.argv[1]) / "src/sparkrun/__init__.py", "PYTHONPATH shadows the selected Sparkrun checkout"' "$checkout" || return 1
+    "$venv_dir/bin/python" -c 'import sys; from pathlib import Path; import sparkrun, sparkrun.plugins as p; assert p.IMAGE_DISTRIBUTION_API_VERSION == 1 and getattr(p, "IMAGE_PULL_API_VERSION", None) == 1, "Sparkrun checkout needs image-distribution API 1 and pre-pull API 1"; assert Path(sparkrun.__file__).resolve() == Path(sys.argv[1]) / "src/sparkrun/__init__.py", "PYTHONPATH shadows the selected Sparkrun checkout"' "$checkout" || return 1
     mkdir -p "$script_dir/.dev" "$script_dir/bin" || return 1
     chmod 700 "$script_dir/.dev" || return 1
     toolchain="$("$venv_dir/bin/python" -c 'import sys,yaml; print("go" + yaml.safe_load(open(sys.argv[1]))["ci"]["go"]["go_version"])' "$script_dir/versions.yaml")" || return 1

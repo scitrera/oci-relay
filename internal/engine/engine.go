@@ -16,6 +16,7 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/image"
 )
 
 type Engine struct{ Client *client.Client }
@@ -37,6 +38,35 @@ func (e *Engine) Close() error { return e.Client.Close() }
 func (e *Engine) Inspect(ctx context.Context, ref string) (client.ImageInspectResult, error) {
 	return e.Client.ImageInspect(ctx, ref)
 }
+
+// InspectPlatform resolves a containerd index to the selected manifest. Classic
+// image IDs remain config digests; containerd IDs must not be treated as such.
+func (e *Engine) InspectPlatform(ctx context.Context, ref string, p v1.Platform) (client.ImageInspectResult, error) {
+	info, err := e.Inspect(ctx, ref)
+	if err != nil || info.Descriptor == nil {
+		return info, err
+	}
+	return e.Client.ImageInspect(ctx, ref, client.ImageInspectWithPlatform(&p))
+}
+
+func MatchesImage(info client.ImageInspectResult, im *image.Image) bool {
+	if !image.Matches(im.Platform, v1.Platform{OS: info.Os, Architecture: info.Architecture, Variant: info.Variant}) {
+		return false
+	}
+	var cfg v1.Image
+	if json.Unmarshal(im.Config, &cfg) != nil || len(info.RootFS.Layers) != len(cfg.RootFS.DiffIDs) {
+		return false
+	}
+	for i, d := range cfg.RootFS.DiffIDs {
+		if info.RootFS.Layers[i] != string(d) {
+			return false
+		}
+	}
+	if info.Descriptor != nil {
+		return info.Descriptor.Digest == im.Digest
+	}
+	return info.ID == string(im.Descriptors[0].Digest)
+}
 func (e *Engine) Tag(ctx context.Context, src, dst string) error {
 	_, err := e.Client.ImageTag(ctx, client.ImageTagOptions{Source: src, Target: dst})
 	return err
@@ -45,8 +75,12 @@ func (e *Engine) RemoveTag(ctx context.Context, tag string) error {
 	_, err := e.Client.ImageRemove(ctx, tag, client.ImageRemoveOptions{})
 	return err
 }
-func (e *Engine) Push(ctx context.Context, ref string) error {
-	r, err := e.Client.ImagePush(ctx, ref, client.ImagePushOptions{RegistryAuth: "e30="})
+func (e *Engine) Push(ctx context.Context, ref string, platform ...v1.Platform) error {
+	options := client.ImagePushOptions{RegistryAuth: "e30="}
+	if len(platform) > 0 {
+		options.Platform = &platform[0]
+	}
+	r, err := e.Client.ImagePush(ctx, ref, options)
 	if err != nil {
 		return err
 	}

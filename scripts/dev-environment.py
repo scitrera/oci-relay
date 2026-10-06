@@ -71,8 +71,8 @@ def verify() -> None:
     from sparkrun.core.image_distribution import _PROVIDERS
     from sparkrun.core.installed_plugins import installed_plugin_inventory
 
-    if api.IMAGE_DISTRIBUTION_API_VERSION != 1:
-        raise RuntimeError('Sparkrun checkout needs image-distribution API 1')
+    if api.IMAGE_DISTRIBUTION_API_VERSION != 1 or getattr(api, "IMAGE_PULL_API_VERSION", None) != 1:
+        raise RuntimeError('Sparkrun checkout needs image-distribution API 1 and pre-pull API 1')
     initialize()
     rows = [row for row in installed_plugin_inventory() if row.name == 'oci-relay']
     if len(rows) != 1 or not rows[0].selected or not rows[0].loaded or rows[0].failure:

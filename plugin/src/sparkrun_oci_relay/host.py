@@ -17,7 +17,7 @@ import time
 import uuid
 
 from .release import file_digest
-from .source_policy import LOCAL_DOCKER, classic_store_reason, docker_facts
+from .source_policy import LOCAL_DOCKER, classic_store_reason, containerd_store_reason, docker_facts, native_mounts
 
 
 class OperationError(RuntimeError):
@@ -116,20 +116,20 @@ class Runner:
         return destination
 
     def start_source(self, host, binary, directory, plan):
-        """Pin classic layers with an owned container; expose only read-only store trees.
+        """Pin native layers with an owned container; expose only read-only store trees.
 
         The relay is the container entrypoint. The image's application is never
         started, and the helper receives no Docker socket.
         """
-        if plan["source"] != "docker-classic":
+        if plan["source"] not in {"docker-classic", "docker-containerd"}:
             self.json(host, directory + "/plan.json", plan)
             return self.start(host, [binary, "run", "--plan", directory + "/plan.json"])
         from sparkrun.plugins import ImageDistributionUnsupported
 
         info = docker_facts(self, host)
-        rejection = classic_store_reason(info)
+        rejection = (containerd_store_reason if plan["source"] == "docker-containerd" else classic_store_reason)(info)
         if rejection:
-            raise ImageDistributionUnsupported("docker-classic: " + rejection)
+            raise ImageDistributionUnsupported(plan["source"] + ": " + rejection)
         image_id = self.execute(host, LOCAL_DOCKER + ["image", "inspect", "--format={{.Id}}", plan["image"]]).decode().strip()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             raise OperationError("Docker returned an invalid image ID")
@@ -138,24 +138,59 @@ class Runner:
         plan = dict(plan, image=image_id, docker_root="/oci-relay-store", engine_version=info["version"],
                     socket_uid=uid, socket_gid=gid)
         self.json(host, directory + "/plan.json", plan)
-        name = "oci-relay-source-" + uuid.uuid4().hex
+        return self._native_helper(host, binary, directory, image_id, info,
+                                   ["run", "--plan", directory + "/plan.json"])
+
+    def start_receiver(self, host, binary, directory, arguments, inventory):
+        if not self.settings.get("allow_native_store", True):
+            return self.start(host, arguments)
+        info = docker_facts(self, host)
+        store = "containerd" if containerd_store_reason(info) is None else "overlay2"
+        if store == "overlay2" and classic_store_reason(info) is not None:
+            return self.start(host, arguments)
+        wanted = inventory.get("diff_ids", [])
+        platform = inventory.get("platform", {})
+        if not wanted or len(wanted) > 4095 or platform.get("os") != "linux":
+            return self.start(host, arguments)
+        budget = self.settings.get("cache_discovery_seconds", 10)
+        discovered = json.loads(self.execute(host, [binary, "inventory", "--timeout-seconds", str(budget)],
+            input_data=json.dumps({"diff_ids": wanted, "platform": platform}).encode(), timeout=budget + 15))
+        path = directory + "/cache-inventory.json"
+        self.json(host, path, discovered)
+        arguments = [*arguments, "--cache-inventory", path]
+        image_id = discovered.get("helper_image")
+        # Empty stores need no helper. Containerd can probe exact CAS paths even
+        # without matching image metadata, using any compatible local image.
+        if not image_id or (store == "overlay2" and not discovered.get("candidates")):
+            return self.start(host, arguments)
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise OperationError("invalid cache helper image ID")
+        command = [*arguments[1:], "--native-store", store, "--native-root", "/oci-relay-store",
+                   "--engine-version", info["version"], "--native-base", image_id]
+        return self._native_helper(host, binary, directory, image_id, info, command, receiver=True)
+
+    def _native_helper(self, host, binary, directory, image_id, info, command, *, receiver=False):
+        name = ("oci-relay-receiver-" if receiver else "oci-relay-source-") + uuid.uuid4().hex
         arguments = LOCAL_DOCKER + ["create", "--name", name, "--interactive", "--read-only", "--network", "host",
                      "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE",
                      "--cap-add", "CHOWN", "--security-opt", "no-new-privileges",
                      "--runtime", "runc", "--workdir", "/", "--no-healthcheck",
-                     "--env", "NVIDIA_VISIBLE_DEVICES=void", "--label", "com.scitrera.oci-relay.source=true",
+                     "--env", "NVIDIA_VISIBLE_DEVICES=void", "--label",
+                     "com.scitrera.oci-relay.receiver=true" if receiver else "com.scitrera.oci-relay.source=true",
                      "--entrypoint", "/oci-relay-bin"]
         if self.settings.get("relay_gomaxprocs", 0):
             arguments.extend(["--env", f"GOMAXPROCS={self.settings['relay_gomaxprocs']}"])
-        for source, target, readonly in [
-            (info["root"] + "/image/overlay2", "/oci-relay-store/image/overlay2", True),
-            (info["root"] + "/overlay2", "/oci-relay-store/overlay2", True),
-            (binary, "/oci-relay-bin", True), (directory, directory, False),
-        ]:
+        mounts = native_mounts(info, self.settings) + [
+            (binary, "/oci-relay-bin", True), (directory, directory, receiver),
+        ]
+        if receiver:
+            # Only receivers need the local Docker API for import/finalization.
+            mounts.append(("/var/run/docker.sock", "/var/run/docker.sock", True))
+        for source, target, readonly in mounts:
             if not source.startswith("/") or any(c in source for c in ',\n\r\x00'):
                 raise OperationError("invalid native helper bind path")
             arguments.extend(["--mount", f"type=bind,src={source},dst={target}" + (",readonly" if readonly else "")])
-        arguments.extend([image_id, "run", "--plan", directory + "/plan.json"])
+        arguments.extend([image_id, *command])
         # Track the unpredictable, operation-owned name before invoking Docker:
         # a disconnected create can succeed without returning its container ID.
         self.containers.append((host, name))

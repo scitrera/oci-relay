@@ -21,7 +21,14 @@ parser.add_argument("--source-mode", choices=["auto", "docker", "docker-save", "
 parser.add_argument("--receiver-import", choices=["pull", "load-cached", "load"], default="pull")
 parser.add_argument("--max-import-bytes", type=int, default=0)
 parser.add_argument("--transport", action="append", choices=["http2-direct", "http2-ssh", "ssh-stdio"])
+parser.add_argument("--data-paths", help="private JSON file of plugin host-to-IP maps (direct transport only)")
+parser.add_argument("--connections-per-path", type=int, choices=range(1, 5), default=1)
 args = parser.parse_args()
+transports = args.transport or (["http2-direct"] if args.data_paths else ["http2-direct", "http2-ssh", "ssh-stdio"])
+if args.data_paths and any(transport != "http2-direct" for transport in transports):
+    parser.error("data_paths qualification requires http2-direct")
+if args.connections_per_path != 1 and not args.data_paths:
+    parser.error("connections_per_path requires data_paths")
 hosts = args.hosts.split(",")
 if len(hosts) < 2 or len(set(hosts)) != len(hosts):
     parser.error("at least two distinct hosts are required")
@@ -31,7 +38,7 @@ session = SshHostSession()
 provider = RelayProvider()
 observations = []
 try:
-    for transport in args.transport or ["http2-direct", "http2-ssh", "ssh-stdio"]:
+    for transport in transports:
         tag = "oci-relay-qualification:" + uuid.uuid4().hex
         source_dir = None
         try:
@@ -55,6 +62,9 @@ try:
                 "receiver_import": args.receiver_import, "max_import_bytes": args.max_import_bytes,
                 "max_buffer_bytes": 8 << 20, "max_spool_bytes": 64 << 20, "max_upload_bytes": 64 << 20,
             }
+            if args.data_paths:
+                settings["data_paths"] = json.loads(Path(args.data_paths).read_text())
+                settings["connections_per_path"] = args.connections_per_path
             request = ImageCopyRequest(
                 image=tag, source_host=hosts[0], targets=tuple(hosts[1:]), transfer_hosts=tuple(hosts[1:]),
                 timeout=180, offline=True, session=session,

@@ -20,20 +20,34 @@ The access/preparation booleans are permissions, independent of source choice.
 Both `allow_native_store` and `allow_preparation_read` default to `true` in the
 plugin; explicit `false` values are preserved. Disabling native access leaves
 public-API source selection available. Disabling `allow_preparation_read` allows
-native-only operation when available. Disabling both requires a supplied
-manifest or reports unsupported before transfer. These defaults do not change
+native-only operation when available. For local-image copying, disabling both requires a supplied
+manifest or reports unsupported before transfer. Registry sourcing needs neither
+permission. These defaults do not change
 the Go CLI's explicit `--allow-preparation-read` flag. Supplying
 an exact manifest permits the push source without a full preparation pass.
 A dry run logs the requested policy and defers host-dependent selection until
 execution, without opening a host session or starting any processes.
 
-## Decision order
+## Registry pre-pull selection
+
+Before local source preparation, the optional Sparkrun pre-pull hook lets auto
+use a registry source for a missing source image or an explicit fresh pull.
+Existing local images keep core's established refresh/local-copy path. Offline
+mode never uses the registry. The fetcher need not import the image unless it is
+also a destination; delegated mode includes the head among receivers. Set
+`registry_source: false` to disable automatic selection, or `source_mode: registry`
+to explicitly choose it. Credentials stay on the fetcher and
+`registry_cache_bytes` is a separate optional compressed-blob disk budget.
+See [registry sources](registry-source.md) for compatibility and limits.
+
+## Local-image decision order
 
 | Circumstance | Choice |
 |---|---|
 | Explicit `source_mode` | Honor it; validate its existing permission/manifest requirements |
 | Supplied manifest under auto | `docker`; preserve exact manifest bytes and compressed representation |
-| Native access allowed, Docker 29.1.3/29.2.1, Linux overlay2, rootful/no user namespace, `runc`, bindable store path | `docker-classic` |
+| Native access allowed, Docker 29+, Linux overlay2, rootful/no user namespace, `runc`, bindable store path | `docker-classic` |
+| Native access allowed, Docker 29+, Linux containerd overlayfs, rootful/no user namespace, `runc`, qualified content directory | `docker-containerd` |
 | Native unavailable/disallowed, qualified archive engine/store, permitted preparation and explicit budget, fast forced-direct route, adequate disk | `docker-save` |
 | Archive not preferred/feasible, full preparation allowed | `docker` push source |
 | No permitted source | Unsupported before pulls; let Sparkrun's configured builtin fallback policy decide |
@@ -46,9 +60,14 @@ config/env or credentials. Explicit source modes and supplied manifests skip
 auto-selection probes. Settings are copied per operation, so a choice for one
 host does not become the choice for another host or later operation.
 
+Docker version checks require major version 29 or newer, with no patch allowlist
+or upper bound. Vendor/build suffixes are accepted. This baseline does not replace
+backend, layout or integrity checks; measured versions are recorded separately in
+[storage compatibility](storage-compatibility.md).
+
 Archive auto-selection is intentionally conservative:
 
-- Limited to the tested Docker 29.1.3/29.2.1 overlay2 exporters. Explicit
+- Limited to Docker 29+ overlay2 exporters. Explicit
   `docker-save` remains available for separate qualification elsewhere.
 - Requires `allow_preparation_read: true` and an explicit `max_spool_bytes`.
 - Requires **requested** `transport: http2-direct` and an effective route hint
@@ -82,15 +101,15 @@ another Docker source is usable.
 
 The initial native preference follows the measured 120–122-second cold copy
 versus 237–239-second builtin save/load comparison; archive staging also avoided
-the much longer push-compression path on this image. See the
-[benchmark](benchmarks/native-2026-10-03.md). These measurements do not establish
-that uncompressed native transfer wins on every slow link, or that the staged
-archive beats builtin save/load. Explicit overrides remain available.
+the much longer push-compression path on this image. These measurements do not
+establish that uncompressed native transfer wins on every slow link, or that
+the staged archive beats builtin save/load. Explicit overrides remain available.
 
 Future improvements can incorporate measured throughput/preparation history,
-receiver missing-layer estimates, already-prepared OCI layouts and native
-containerd content. The current policy does not scan for layouts, migrate image
+receiver missing-layer estimates and already-prepared OCI layouts. The current policy does not scan for layouts, migrate image
 stores, benchmark live images during selection, or weaken qualification for a
 new Docker version. Existing whole-image matches are still skipped by Sparkrun
-before provider invocation; partial compressed-to-uncompressed cache behavior
-is unchanged.
+before provider invocation. Qualified receivers now inventory matching DiffID
+chains and negotiate cached-layer representations across stores; see
+[storage compatibility](storage-compatibility.md). Containerd native access and
+receiver helpers follow the same explicit `allow_native_store` opt-out.

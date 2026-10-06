@@ -6,6 +6,7 @@ require (
 	d7y.io/dragonfly/v2 v2.5.3-rc.0.0.20260929132700-41b312389c90
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
+	github.com/docker/distribution v2.8.3+incompatible
 	github.com/moby/moby/client v0.6.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1

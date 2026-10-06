@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/buildinfo"
 	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/image"
@@ -42,7 +43,7 @@ func main() {
 }
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci-relay {version|session|serve|run|peer|attach|prepare} [options]")
+		return errors.New("usage: oci-relay {version|session|serve|run|peer|attach|prepare|inventory} [options]")
 	}
 	switch args[0] {
 	case "version", "--version":
@@ -67,6 +68,34 @@ func run(ctx context.Context, args []string) error {
 		return serve(ctx, args[0], args[1:])
 	case "peer":
 		return receive(ctx, args[1:])
+	case "inventory":
+		fs := flags("inventory")
+		host := fs.String("docker-host", "", "local Docker Unix socket")
+		timeout := fs.Int("timeout-seconds", 10, "metadata discovery budget (1 to 300 seconds)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *timeout < 1 || *timeout > 300 {
+			return errors.New("invalid inventory timeout")
+		}
+		raw, err := image.ReadBounded(os.Stdin, image.MaxMetadata)
+		if err != nil {
+			return err
+		}
+		var request engine.InventoryRequest
+		if err = json.Unmarshal(raw, &request); err != nil {
+			return err
+		}
+		e, err := engine.New(*host)
+		if err != nil {
+			return err
+		}
+		defer e.Close()
+		inventory, err := e.Discover(ctx, request, time.Duration(*timeout)*time.Second, false)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(inventory)
 	case "attach":
 		fs := flags("attach")
 		socket := fs.String("socket", "", "source Unix socket")
@@ -88,6 +117,9 @@ func flags(name string) *flag.FlagSet {
 }
 
 type plan struct {
+	RegistryConfig         string `json:"registry_config"`
+	RegistryPlainHTTP      bool   `json:"registry_plain_http"`
+	RegistryCacheBytes     int64  `json:"registry_cache_bytes"`
 	Version                int    `json:"version"`
 	Source                 string `json:"source"`
 	Image                  string `json:"image"`
@@ -119,8 +151,11 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	p := plan{Version: peer.ProtocolVersion, Source: "docker", Listen: "127.0.0.1:0", MaxBuffer: 128 << 20, MaxSpool: 8 << 30, SourceStreams: 4, TimeoutSeconds: 3600}
 	fs := flags(command)
 	planPath := fs.String("plan", "", "versioned JSON source plan")
-	fs.StringVar(&p.Source, "source", p.Source, "docker, docker-save (full staging), docker-classic (read-only store), or oci-layout")
-	fs.StringVar(&p.DockerRoot, "docker-root", "", "read-only qualified classic store root")
+	fs.StringVar(&p.Source, "source", p.Source, "docker, docker-save (full staging), docker-classic/docker-containerd (read-only store), oci-layout, or registry")
+	fs.StringVar(&p.RegistryConfig, "registry-config", "", "Docker config.json on the fetcher (default Docker config location)")
+	fs.BoolVar(&p.RegistryPlainHTTP, "registry-plain-http", false, "explicitly use plain HTTP for the source registry")
+	fs.Int64Var(&p.RegistryCacheBytes, "registry-cache-bytes", 0, "optional retained compressed-blob disk budget (0 streams without disk cache)")
+	fs.StringVar(&p.DockerRoot, "docker-root", "", "read-only qualified Docker store root (or containerd content root)")
 	fs.StringVar(&p.EngineVersion, "engine-version", "", "qualified source Docker engine version")
 	fs.StringVar(&p.Image, "image", "", "source image or layout reference")
 	fs.StringVar(&p.Layout, "layout", "", "existing OCI-layout directory")
@@ -225,7 +260,33 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	var dockerSource *source.Docker
 	var archiveSource *source.Archive
 	var nativeSource *source.Native
+	var containerdSource *source.Containerd
+	var registrySource *source.Registry
 	switch p.Source {
+	case "registry":
+		if p.Image == "" || p.Manifest != "" {
+			return errors.New("registry requires --image and resolves its own pinned manifest")
+		}
+		registrySource, err = source.NewRegistry(ctx, source.RegistryOptions{
+			Reference: p.Image, Platform: platform, ConfigPath: p.RegistryConfig, PlainHTTP: p.RegistryPlainHTTP,
+			MaxCacheBytes: p.RegistryCacheBytes, SpoolDir: p.SpoolDir,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, registrySource.Close()) }()
+		im, src = registrySource.Image, registrySource
+
+	case "docker-containerd":
+		if p.DockerRoot == "" || p.Manifest != "" {
+			return errors.New("docker-containerd requires --docker-root and supplies its own manifest")
+		}
+		containerdSource, err = source.NewContainerd(ctx, p.DockerRoot, p.Image, p.EngineVersion, platform)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, containerdSource.Close()) }()
+		im, src = containerdSource.Image, containerdSource
 	case "docker-classic":
 		if p.DockerRoot == "" || p.Manifest != "" {
 			return errors.New("docker-classic requires --docker-root and supplies its own manifest")
@@ -296,7 +357,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 		im = dockerSource.Image
 		src = dockerSource
 	default:
-		return errors.New("unsupported source; use docker, docker-save, docker-classic, or oci-layout")
+		return errors.New("unsupported source; use docker, docker-save, docker-classic, docker-containerd, oci-layout, or registry")
 	}
 	if command == "prepare" {
 		if *output == "" {
@@ -310,7 +371,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 		return err
 	}
 	defer cache.Close()
-	cache.ConcurrentReplay = p.Source == "docker-save" || p.Source == "oci-layout" || p.Source == "docker-classic"
+	cache.ConcurrentReplay = p.Source == "docker-save" || p.Source == "oci-layout" || p.Source == "docker-classic" || p.Source == "docker-containerd"
 	cache.JoinReaders = len(sess.Peers) - 1 // Manager never consumes blobs.
 	cache.JoinWindow = time.Duration(p.SourceJoinMilliseconds) * time.Millisecond
 	if p.Socket == "" {
@@ -324,8 +385,8 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	// A confined root helper may expose its private attachment socket to the
 	// coordinating host user. The surrounding operation directory remains 0700.
 	if p.SocketUID != nil || p.SocketGID != nil {
-		if p.Source != "docker-classic" || p.SocketUID == nil || p.SocketGID == nil || *p.SocketUID < 0 || *p.SocketGID < 0 {
-			return errors.New("socket ownership requires docker-classic and nonnegative uid/gid")
+		if (p.Source != "docker-classic" && p.Source != "docker-containerd") || p.SocketUID == nil || p.SocketGID == nil || *p.SocketUID < 0 || *p.SocketGID < 0 {
+			return errors.New("socket ownership requires a native source and nonnegative uid/gid")
 		}
 		if err = os.Chown(p.Socket, *p.SocketUID, *p.SocketGID); err != nil {
 			return err
@@ -344,18 +405,26 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	}
 	endpoint := "https://" + net.JoinHostPort(host, port)
 	encode := json.NewEncoder(os.Stdout)
-	if err = encode.Encode(map[string]any{"type": "ready", "version": peer.ProtocolVersion, "transfer": sess.Source.Transfer, "endpoint": endpoint, "socket": p.Socket, "manifest_digest": im.Digest}); err != nil {
+	var config v1.Image
+	if err = json.Unmarshal(im.Config, &config); err != nil {
+		return err
+	}
+	if err = encode.Encode(map[string]any{"diff_ids": config.RootFS.DiffIDs, "platform": im.Platform, "type": "ready", "version": peer.ProtocolVersion, "transfer": sess.Source.Transfer, "endpoint": endpoint, "socket": p.Socket, "manifest_digest": im.Digest, "config_digest": im.Descriptors[0].Digest}); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
-	progress := time.NewTicker(5 * time.Second)
+	progress := time.NewTicker(time.Second)
 	defer progress.Stop()
 	for {
 		results := s.Results()
 		if len(results) == len(sess.Peers)-1 {
 			complete := true
+			verified := true
 			for _, r := range results {
+				if r.State != "VERIFIED" {
+					verified = false
+				}
 				if r.State != "COMPLETE" {
 					complete = false
 				}
@@ -363,6 +432,10 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 			state := "COMPLETE"
 			if !complete {
 				state = "FAILED"
+			}
+			if verified {
+				state = "VERIFIED"
+				complete = true
 			}
 			event := map[string]any{"type": "result", "version": peer.ProtocolVersion, "transfer": sess.Source.Transfer, "state": state, "receivers": results, "metrics": cache.Metrics()}
 			if dockerSource != nil {
@@ -376,9 +449,19 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 				event["export_first_byte_seconds"] = archiveSource.FirstByteSeconds
 				event["peak_spool_reserved_bytes"] = archiveSource.Bytes
 			}
+			if registrySource != nil {
+				event["registry_metrics"] = registrySource.Metrics()
+				event["registry_root_digest"] = registrySource.RootDigest
+				event["preparation_seconds"] = registrySource.PreparationSeconds
+			}
 			if nativeSource != nil {
 				event["preparation_bytes"] = nativeSource.MetadataBytes
 				event["preparation_seconds"] = nativeSource.PreparationSeconds
+				event["peak_spool_reserved_bytes"] = 0
+			}
+			if containerdSource != nil {
+				event["preparation_bytes"] = containerdSource.MetadataBytes
+				event["preparation_seconds"] = containerdSource.PreparationSeconds
 				event["peak_spool_reserved_bytes"] = 0
 			}
 			if err = encode.Encode(event); err != nil {
@@ -398,7 +481,11 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 			return errors.New("manager lease expired")
 		case <-ticker.C:
 		case <-progress.C:
-			if err = encode.Encode(map[string]any{"type": "progress", "version": peer.ProtocolVersion, "transfer": sess.Source.Transfer, "completed_receivers": len(results), "metrics": cache.Metrics()}); err != nil {
+			event := map[string]any{"type": "progress", "version": peer.ProtocolVersion, "transfer": sess.Source.Transfer, "completed_receivers": len(results), "metrics": cache.Metrics(), "receiver_progress": s.Progress(), "receivers": results}
+			if registrySource != nil {
+				event["registry_metrics"] = registrySource.Metrics()
+			}
+			if err = encode.Encode(event); err != nil {
 				return err
 			}
 		}
@@ -410,10 +497,27 @@ func receive(parent context.Context, args []string) error {
 	session := fs.String("session", "", "receiver credential file")
 	stdio := fs.Bool("stdio", false, "carry TLS/HTTP2 over stdin/stdout")
 	check := fs.Bool("check", false, "verify source metadata and transport without starting Docker")
+	verify := fs.Bool("transfer-only", false, "download and verify every unique blob without Docker import (reports VERIFIED)")
+	connections := fs.Int("connections-per-path", 1, "independent HTTP/2 connections per explicit data path (1 to 4)")
+	var paths []peer.Path
+	fs.Func("path", "HTTPS_ENDPOINT,LOCAL_IP data route; repeat to distribute whole layers across links", func(value string) error {
+		endpoint, local, ok := strings.Cut(value, ",")
+		if !ok {
+			return errors.New("path requires HTTPS_ENDPOINT,LOCAL_IP")
+		}
+		paths = append(paths, peer.Path{Endpoint: endpoint, LocalAddress: local})
+		return nil
+	})
 	timeout := fs.Int("timeout-seconds", 3600, "transfer deadline")
 	options := peer.PullOptions{Retries: 2}
+	inventoryPath := fs.String("cache-inventory", "", "private JSON cache discovery hints from the inventory command")
 	fs.StringVar(&options.Tag, "tag", "", "destination image tag")
 	fs.StringVar(&options.DockerHost, "docker-host", "", "local Docker Unix socket")
+	fs.StringVar(&options.NativeStore, "native-store", "", "qualified receiver native store: overlay2 or containerd")
+	fs.StringVar(&options.NativeBase, "native-base", "", "optional pinned local base image ID from coordinator inventory")
+	fs.StringVar(&options.NativeRoot, "native-root", "", "read-only receiver store/content root")
+	fs.StringVar(&options.EngineVersion, "engine-version", "", "qualified receiver Docker version")
+	fs.BoolVar(&options.SkipPresent, "skip-present", false, "skip import when the destination tag already has the exact config ID/platform")
 	fs.BoolVar(&options.ReplaceTag, "replace-tag", false, "replace a conflicting destination tag")
 	fs.Int64Var(&options.Memory, "max-buffer-bytes", 128<<20, "receiver cache byte budget")
 	fs.IntVar(&options.Parallel, "max-source-streams", 4, "receiver source streams")
@@ -426,6 +530,21 @@ func receive(parent context.Context, args []string) error {
 	if *timeout < 1 || *timeout > 86400 {
 		return errors.New("invalid timeout")
 	}
+	if *inventoryPath != "" {
+		f, err := os.Open(*inventoryPath)
+		if err != nil {
+			return err
+		}
+		raw, readErr := image.ReadBounded(f, image.MaxMetadata)
+		closeErr := f.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return err
+		}
+		options.Inventory = &engine.Inventory{}
+		if err := json.Unmarshal(raw, options.Inventory); err != nil {
+			return err
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(*timeout)*time.Second)
 	defer cancel()
 	creds, err := peer.LoadCredentials(*session)
@@ -436,7 +555,18 @@ func receive(parent context.Context, args []string) error {
 	if *stdio {
 		connection = &peer.StdioConn{In: os.Stdin, Out: os.Stdout}
 	}
-	c, err := peer.NewClient(*endpoint, creds, connection)
+	var c *peer.Client
+	if len(paths) != 0 {
+		if *stdio || *endpoint != "" {
+			return errors.New("--path cannot be combined with --stdio or --endpoint")
+		}
+		c, err = peer.NewPathClientConnections(paths, creds, *connections)
+	} else {
+		if *connections != 1 {
+			return errors.New("--connections-per-path requires --path")
+		}
+		c, err = peer.NewClient(*endpoint, creds, connection)
+	}
 	if err != nil {
 		return err
 	}
@@ -452,7 +582,13 @@ func receive(parent context.Context, args []string) error {
 		}
 		return json.NewEncoder(out).Encode(map[string]any{"state": "READY", "version": peer.ProtocolVersion, "manifest_digest": im.Digest})
 	}
-	result, pullErr := peer.Pull(ctx, c, options)
+	var result peer.Result
+	var pullErr error
+	if *verify {
+		result, pullErr = peer.Verify(ctx, c, options)
+	} else {
+		result, pullErr = peer.Pull(ctx, c, options)
+	}
 	reportCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
 	reportErr := c.Report(reportCtx, result)
