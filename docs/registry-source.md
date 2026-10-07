@@ -148,6 +148,71 @@ retained file satisfies a later receiver.
 blob checks performed by the transfer cache or by a standalone registry fetch,
 respectively. They exclude manifest/config checks and failed blob checks.
 
+## Parallel upstream ranges
+
+Starting with v0.1.2, range-capable source binaries (`registry-range-v1`) automatically split registry
+blobs **at least 256 MiB** into **16 MiB HTTP byte ranges**, using up to **four
+concurrent requests per blob**. Small layers keep ordinary GETs. This operates
+between the registry/CDN and the fetcher; relay-to-receiver link striping remains
+independent. It can improve downloads dominated by a few large layers when the
+upstream limits individual response streams. Registry-wide rate limits and a
+saturated Internet connection still bound aggregate throughput.
+
+The first request probes a real range. A valid `206` starts the other requests;
+a `200` is consumed directly as the full blob without requesting it again.
+A `416` falls back to one ordinary GET before writing payload. No HEAD request
+or `Accept-Ranges` advertisement is required. Each partial response must match
+the requested interval, manifest size and optional digest header. See
+[HTTP range semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-range).
+Malformed ranges, changed HTTP encoding, truncated bodies and incorrect hashes
+fail the acquisition. Once a ranged transfer has started, an unexpected full
+response does not restart or splice bytes into that stream.
+
+Completed ranges feed the existing source pipeline in order. One full-layer
+SHA verification still gates completion and retained-cache publication; range
+downloads do not introduce an extra SHA pass or require full-layer disk staging.
+Upstream reads overlap downstream delivery. A bounded window retains out-of-order
+pieces; all layers share one budget. The CLI reserves one quarter of
+`max_buffer_bytes`, capped at **128 MiB**, for these windows and gives the rest
+to the source transfer cache. HTTP/TLS buffers remain additional transport
+overhead. If the range budget cannot hold the requested concurrency, concurrency
+is reduced; fewer than two pieces disables ranges. Images without eligible
+layers do not reserve range memory.
+
+Plugin overrides (omit them for automatic defaults):
+
+```yaml
+plugins:
+  oci-relay:
+    registry_range_concurrency: 4          # 1 disables; supported range 1–16.
+    registry_range_chunk_bytes: 16777216   # 16 MiB; supported range 64 KiB–64 MiB.
+    registry_range_threshold_bytes: 268435456  # 256 MiB; 64 KiB–1 PiB.
+    registry_range_buffer_bytes: 134217728 # Shared 128 MiB; 64 KiB–1 GiB.
+```
+
+An explicit range buffer must leave at least 8 MiB for the source cache. For
+example, use a total `max_buffer_bytes` of at least 136 MiB with the explicit
+128 MiB range buffer above. The corresponding CLI flags replace underscores
+with hyphens. The plugin sends overrides only to a capable source binary;
+explicit overrides with an older binary produce an actionable error. Published
+v0.1.1 binaries predate this capability; use v0.1.2 or newer.
+
+Metrics distinguish `range_downloads` (blob acquisitions), `range_requests`
+(logical requests, excluding authentication/status retries), `range_fallbacks`,
+`active_range_requests`, `peak_range_requests`, and current/peak reserved range
+buffer bytes. `upstream_blob_bytes` counts bytes actually read, including failed
+attempts; successful ranged downloads read each byte once. The existing
+`blob_downloads` remains a blob-attempt count, not a range-request count.
+
+For a repeatable synthetic comparison with a per-response bandwidth limit:
+
+```sh
+go test ./internal/source -run '^$' -bench '^BenchmarkRegistryRangeDownload$' -benchtime=3x
+```
+
+This benchmark includes full SHA verification and excludes Docker import. It
+models a per-stream bottleneck, not registry-wide limits or LAN capacity.
+
 ## Credentials and protocol behavior
 
 Credentials stay on the selected fetcher. The source reads its Docker
@@ -168,7 +233,8 @@ hashes cover the exact manifest representation.
 
 HTTP 429/503 and authentication retries are bounded. Partial bodies are not
 appended to a new attempt; the existing acquisition/receiver retry mechanism
-starts the blob again. HTTP Range resume is not implemented.
+starts the blob again. Parallel ranges are supported as above; resuming partial
+ranges or persisting downloaded pieces across failed acquisitions is not implemented.
 
 ## Dragonfly reuse
 

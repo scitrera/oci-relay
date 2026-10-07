@@ -37,9 +37,14 @@ type registryFixture struct {
 	handler                                  func(http.ResponseWriter, *http.Request) bool
 }
 
-func newRegistryFixture(t *testing.T) *registryFixture {
+func newRegistryFixture(t testing.TB) *registryFixture {
 	t.Helper()
-	raw := make([]byte, 256<<10)
+	return newRegistryFixtureSize(t, 256<<10)
+}
+
+func newRegistryFixtureSize(t testing.TB, size int) *registryFixture {
+	t.Helper()
+	raw := make([]byte, size)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
 	}

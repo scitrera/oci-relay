@@ -66,12 +66,21 @@ func (h *registryHTTP) auth() string {
 	return ""
 }
 func (h *registryHTTP) get(ctx context.Context, address, accept string) (*http.Response, error) {
+	return h.getRange(ctx, address, accept, "")
+}
+
+// Ranges share the same authentication, redirect, encoding and retry policy as
+// ordinary GETs. The caller must validate every 206 before consuming its body.
+func (h *registryHTTP) getRange(ctx context.Context, address, accept, byteRange string) (*http.Response, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 		if err != nil {
 			return nil, errors.New("invalid registry URL")
 		}
 		req.Header.Set("Accept-Encoding", "identity")
+		if byteRange != "" {
+			req.Header.Set("Range", byteRange)
+		}
 		if accept != "" {
 			req.Header.Set("Accept", accept)
 		}
@@ -83,11 +92,14 @@ func (h *registryHTTP) get(ctx context.Context, address, accept string) (*http.R
 		if err != nil {
 			return nil, safeRequestError(ctx, err)
 		}
-		if resp.StatusCode == http.StatusOK {
+		if resp.StatusCode == http.StatusOK || (byteRange != "" && resp.StatusCode == http.StatusPartialContent) {
 			if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
 				resp.Body.Close()
 				return nil, errors.New("registry HTTP content encoding changes blob representation")
 			}
+			return resp, nil
+		}
+		if byteRange != "" && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 			return resp, nil
 		}
 		challenges := challenge.ResponseChallenges(resp)

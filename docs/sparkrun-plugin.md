@@ -73,6 +73,12 @@ hash, and checks the version/protocol before use. Hosts do not need internet
 access. Offline mode never downloads a binary. `releases.json` pins the published archives for each supported architecture.
 The adapter is pinned after the binary release, without moving the engine tag.
 
+Source binaries from v0.1.2 advertise `registry-range-v1` and automatically parallelize
+large upstream layer downloads. Plugin settings can adjust concurrency, range
+size, threshold and the shared buffer budget; see
+[parallel upstream ranges](registry-source.md#parallel-upstream-ranges).
+This is separate from receiver link striping and requires v0.1.2 or newer.
+
 With updated Sparkrun `develop-next`, automatic provider selection falls back to
 builtin Docker distribution if the relay release is unavailable (including
 network errors, timeouts, or offline mode without a cached release), or the

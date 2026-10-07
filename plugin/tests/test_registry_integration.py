@@ -26,7 +26,7 @@ def digest(data):
 
 
 class RegistryFixture:
-    def __init__(self, size=128 << 10, layer_count=2, chunk_delay=0):
+    def __init__(self, size=128 << 10, layer_count=2, chunk_delay=0, ranges=False):
         self.repository = 'relay-test/' + uuid.uuid4().hex
         self.blobs = {}
         self.descriptors = []
@@ -75,7 +75,16 @@ class RegistryFixture:
                 if data is None:
                     self.send_error(404)
                     return
-                self.send_response(200)
+                byte_range = self.headers.get('Range') if ranges else None
+                if byte_range:
+                    first, last = map(int, byte_range.removeprefix('bytes=').split('-'))
+                    assert 0 <= first <= last < len(data)
+                    total = len(data)
+                    data = data[first:last + 1]
+                    self.send_response(206)
+                    self.send_header('Content-Range', f'bytes {first}-{last}/{total}')
+                else:
+                    self.send_response(200)
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
                 if chunk_delay and self.path.rsplit('/', 1)[-1] in {d['digest'] for d in fixture.descriptors}:
@@ -108,7 +117,8 @@ class RegistryFixture:
 
 
 @pytest.mark.parametrize("bundled_decoder", [False, True])
-def test_striped_registry_import_downloads_once_and_preserves_reuse(tmp_path, monkeypatch, caplog, bundled_decoder):
+@pytest.mark.parametrize("upstream_ranges", [False, True])
+def test_striped_registry_import_downloads_once_and_preserves_reuse(tmp_path, monkeypatch, caplog, bundled_decoder, upstream_ranges):
     from types import SimpleNamespace
 
     from sparkrun.plugins import ImagePullRequest
@@ -116,13 +126,16 @@ def test_striped_registry_import_downloads_once_and_preserves_reuse(tmp_path, mo
     from sparkrun_oci_relay.host import Runner
     from sparkrun_oci_relay.provider import RelayProvider
 
-    fixture = RegistryFixture(size=12 << 20)
+    fixture = RegistryFixture(size=12 << 20, ranges=upstream_ranges)
     config_file = tmp_path / 'docker-config.json'
     config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
     settings = {'development_binary': os.environ['OCI_RELAY_BINARY'], 'remote_cache_dir': str(tmp_path / 'binaries'),
                 'transport': 'http2-direct', 'registry_plain_http': True, 'registry_config': str(config_file),
                 'registry_cache_bytes': 0, 'max_buffer_bytes': 8 << 20,
                 'stripe_threshold_bytes': 8 << 20, 'stripe_streams': 4}
+    if upstream_ranges:
+        settings.update(max_buffer_bytes=32 << 20, registry_range_chunk_bytes=1 << 20,
+                        registry_range_threshold_bytes=8 << 20, registry_range_concurrency=4)
     if bundled_decoder:
         helper = os.environ.get('OCI_RELAY_UNPIGZ')
         if not helper:
@@ -161,8 +174,13 @@ def test_striped_registry_import_downloads_once_and_preserves_reuse(tmp_path, mo
             assert observed['RootFS']['Layers'] == fixture.diff_ids[:count]
             downloads = [d for d in fixture.downloads if d in {v['digest'] for v in fixture.descriptors}]
             if count == 1 or previous != fixture.config_id:
-                assert downloads == [fixture.descriptors[count - 1]['digest']], 'striping repeated upstream layer download'
+                layer = fixture.descriptors[count - 1]
+                requests = (layer['size'] + (1 << 20) - 1) // (1 << 20) if upstream_ranges else 1
+                assert downloads == [layer['digest']] * requests, 'striping repeated upstream layer bytes'
                 registry = next(record.args for record in caplog.records if record.msg == 'OCI Relay registry: %s')
+                assert registry['upstream_blob_bytes'] == layer['size']
+                assert registry['range_downloads'] == int(upstream_ranges)
+                assert registry['range_requests'] == (requests if upstream_ranges else 0)
                 assert registry['shared_sha256_verifications'] == 1
                 assert registry['local_sha256_verifications'] == 0
                 timings = next(record.args for record in caplog.records if record.msg == 'OCI Relay receiver timings: %s')

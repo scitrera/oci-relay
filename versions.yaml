@@ -1,6 +1,6 @@
 # Canonical release versions and generated GitHub CI configuration.
-oci-relay: 0.1.1
-sparkrun-oci-relay-plugin: 0.1.1
+oci-relay: 0.1.2
+sparkrun-oci-relay-plugin: 0.1.2
 
 go_toolchain:
   go: "1.25.0"

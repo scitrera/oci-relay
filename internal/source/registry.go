@@ -27,14 +27,18 @@ import (
 )
 
 type RegistryOptions struct {
-	Reference     string
-	Platform      v1.Platform
-	ConfigPath    string
-	PlainHTTP     bool  // Explicit opt-in for a trusted plain-HTTP registry; never disables HTTPS verification.
-	MaxCacheBytes int64 // Optional retained compressed blobs, separate from transfer cache memory.
-	SpoolDir      string
-	Transport     *http.Transport      // Optional verified CA/proxy customization for embedded callers.
-	Credentials   *RegistryCredentials // Optional in-memory credentials; nil loads Docker config on this host.
+	Reference           string
+	Platform            v1.Platform
+	ConfigPath          string
+	PlainHTTP           bool  // Explicit opt-in for a trusted plain-HTTP registry; never disables HTTPS verification.
+	MaxCacheBytes       int64 // Optional retained compressed blobs, separate from transfer cache memory.
+	SpoolDir            string
+	Transport           *http.Transport      // Optional verified CA/proxy customization for embedded callers.
+	Credentials         *RegistryCredentials // Optional in-memory credentials; nil loads Docker config on this host.
+	RangeConcurrency    int                  // 0 defaults to 4 requests per blob; 1 disables ranges.
+	RangeChunkBytes     int64                // 0 defaults to 16 MiB.
+	RangeThresholdBytes int64                // 0 defaults to 256 MiB.
+	RangeBufferBytes    int64                // Shared range read-ahead budget; 0 defaults to 128 MiB.
 }
 
 type RegistryMetrics struct {
@@ -48,6 +52,13 @@ type RegistryMetrics struct {
 	MetadataBytes          int64 `json:"metadata_bytes"`
 	SharedVerifications    int64 `json:"shared_sha256_verifications"`
 	LocalVerifications     int64 `json:"local_sha256_verifications"`
+	RangeDownloads         int64 `json:"range_downloads"`
+	RangeRequests          int64 `json:"range_requests"`
+	RangeFallbacks         int64 `json:"range_fallbacks"`
+	ActiveRangeRequests    int64 `json:"active_range_requests"`
+	PeakRangeRequests      int64 `json:"peak_range_requests"`
+	RangeBufferBytes       int64 `json:"range_buffer_bytes"`
+	PeakRangeBufferBytes   int64 `json:"peak_range_buffer_bytes"`
 }
 
 type registryBlob struct {
@@ -74,6 +85,7 @@ type Registry struct {
 	upstream, downloads, hits, bypasses, metadata atomic.Int64
 	cacheErrors                                   atomic.Int64
 	sharedVerifications, localVerifications       atomic.Int64
+	ranges                                        registryRanges
 }
 
 func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, returnErr error) {
@@ -98,6 +110,9 @@ func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, return
 			returnErr = errors.Join(returnErr, r.Close())
 		}
 	}()
+	if err = r.ranges.configure(o); err != nil {
+		return nil, err
+	}
 	var creds RegistryCredentials
 	if o.Credentials != nil {
 		creds = *o.Credentials
@@ -173,6 +188,14 @@ func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, return
 	r.Image, err = image.Parse(selected, config, selectedDigest, o.Platform)
 	if err != nil {
 		return nil, err
+	}
+	eligible := false
+	for _, layer := range r.Image.Descriptors[1:] {
+		eligible = eligible || (layer.Size >= r.ranges.threshold && layer.Size > r.ranges.chunk)
+	}
+	if !eligible {
+		// Small-image operations need no read-ahead reservation at all.
+		r.ranges.streams, r.ranges.budget = 1, 0
 	}
 	r.PreparationSeconds = time.Since(start).Seconds()
 	return r, nil
@@ -399,15 +422,22 @@ func (r *Registry) verifyingWriter(d v1.Descriptor, w io.Writer, verify func() e
 }
 
 func (r *Registry) download(ctx context.Context, d v1.Descriptor, w io.Writer, verify func() error) error {
+	if r.ranges.streams > 1 && d.Size >= r.ranges.threshold && d.Size > r.ranges.chunk {
+		return r.downloadRanges(ctx, d, w, verify)
+	}
 	resp, err := r.http.get(ctx, r.http.ref.BlobURL(d.Digest.String()), "")
 	if err != nil {
 		return err
 	}
+	r.downloads.Add(1)
+	return r.downloadResponse(ctx, d, w, verify, resp)
+}
+
+func (r *Registry) downloadResponse(ctx context.Context, d v1.Descriptor, w io.Writer, verify func() error, resp *http.Response) error {
 	defer resp.Body.Close()
 	if resp.ContentLength >= 0 && resp.ContentLength != d.Size {
 		return errors.New("registry blob length mismatch")
 	}
-	r.downloads.Add(1)
 	dst, finish := r.verifyingWriter(d, w, verify)
 	reader := &countRegistryReader{r: io.LimitReader(resp.Body, d.Size), count: &r.upstream}
 	// A source stream may write unverified prefixes; transfer.Cache withholds its
@@ -439,7 +469,10 @@ func (r *countRegistryReader) Read(p []byte) (int, error) {
 func (r *Registry) Metrics() RegistryMetrics {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return RegistryMetrics{UpstreamBytes: r.upstream.Load(), Downloads: r.downloads.Load(), CacheHits: r.hits.Load(), CacheBypasses: r.bypasses.Load(), CacheWriteErrors: r.cacheErrors.Load(), CacheReservedBytes: r.reserved, PeakCacheReservedBytes: r.peak, MetadataBytes: r.metadata.Load(), SharedVerifications: r.sharedVerifications.Load(), LocalVerifications: r.localVerifications.Load()}
+	return RegistryMetrics{UpstreamBytes: r.upstream.Load(), Downloads: r.downloads.Load(), CacheHits: r.hits.Load(), CacheBypasses: r.bypasses.Load(), CacheWriteErrors: r.cacheErrors.Load(), CacheReservedBytes: r.reserved, PeakCacheReservedBytes: r.peak, MetadataBytes: r.metadata.Load(), SharedVerifications: r.sharedVerifications.Load(), LocalVerifications: r.localVerifications.Load(),
+		RangeDownloads: r.ranges.downloads.Load(), RangeRequests: r.ranges.requests.Load(), RangeFallbacks: r.ranges.fallbacks.Load(),
+		ActiveRangeRequests: r.ranges.active.Load(), PeakRangeRequests: r.ranges.peakActive.Load(),
+		RangeBufferBytes: r.ranges.used.Load(), PeakRangeBufferBytes: r.ranges.peakUsed.Load()}
 }
 func (r *Registry) Close() error {
 	r.mu.Lock()

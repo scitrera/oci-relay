@@ -4,6 +4,7 @@
 """Exercise real acquisition -> provider -> host dispatch without SSH or Docker."""
 
 import io
+import json
 import urllib.error
 
 import pytest
@@ -16,6 +17,12 @@ from sparkrun_oci_relay import provider, release
 @pytest.fixture
 def dispatch(tmp_path, monkeypatch):
     closed = []
+    # Acquisition failure tests must also run before a new engine's artifact
+    # checksums have been published. Never depend on the release manifest.
+    monkeypatch.setattr(release, '__file__', str(tmp_path / 'release.py'))
+    (tmp_path / 'releases.json').write_text(json.dumps({release.__version__: {'linux/arm64': {
+        'url': 'https://example.invalid/release.tar.gz', 'sha256': 'a' * 64,
+    }}}))
 
     class Config(dict):
         def plugin_settings(self, name):

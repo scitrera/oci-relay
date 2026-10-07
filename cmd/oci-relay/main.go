@@ -47,7 +47,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "version", "--version":
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion, "capabilities": []string{"receiver-unpigz-v1"}})
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion, "capabilities": []string{"receiver-unpigz-v1", "registry-range-v1"}})
 	case "session":
 		fs := flags("session")
 		dir := fs.String("out", "", "private output directory")
@@ -117,34 +117,38 @@ func flags(name string) *flag.FlagSet {
 }
 
 type plan struct {
-	RegistryConfig         string `json:"registry_config"`
-	RegistryPlainHTTP      bool   `json:"registry_plain_http"`
-	RegistryCacheBytes     int64  `json:"registry_cache_bytes"`
-	Version                int    `json:"version"`
-	Source                 string `json:"source"`
-	Image                  string `json:"image"`
-	Layout                 string `json:"layout"`
-	Platform               string `json:"platform"`
-	Manifest               string `json:"manifest"`
-	DockerHost             string `json:"docker_host"`
-	DockerRoot             string `json:"docker_root"`
-	EngineVersion          string `json:"engine_version"`
-	SocketUID              *int   `json:"socket_uid,omitempty"`
-	SocketGID              *int   `json:"socket_gid,omitempty"`
-	SessionDir             string `json:"session_dir"`
-	Listen                 string `json:"listen"`
-	Advertise              string `json:"advertise"`
-	Socket                 string `json:"socket"`
-	AllowPreparationRead   bool   `json:"allow_preparation_read"`
-	MaxBuffer              int64  `json:"max_buffer_bytes"`
-	MaxSpool               int64  `json:"max_spool_bytes"`
-	MaxUpload              int64  `json:"max_upload_bytes"`
-	SpoolDir               string `json:"spool_dir"`
-	SourceStreams          int    `json:"source_streams"`
-	SourceJoinMilliseconds int    `json:"source_join_milliseconds"`
-	TimeoutSeconds         int    `json:"timeout_seconds"`
-	LeaseSeconds           int    `json:"lease_seconds"`
-	ManagedStdin           bool   `json:"managed_stdin"`
+	RegistryConfig              string `json:"registry_config"`
+	RegistryPlainHTTP           bool   `json:"registry_plain_http"`
+	RegistryCacheBytes          int64  `json:"registry_cache_bytes"`
+	RegistryRangeConcurrency    int    `json:"registry_range_concurrency"`
+	RegistryRangeChunkBytes     int64  `json:"registry_range_chunk_bytes"`
+	RegistryRangeThresholdBytes int64  `json:"registry_range_threshold_bytes"`
+	RegistryRangeBufferBytes    int64  `json:"registry_range_buffer_bytes"`
+	Version                     int    `json:"version"`
+	Source                      string `json:"source"`
+	Image                       string `json:"image"`
+	Layout                      string `json:"layout"`
+	Platform                    string `json:"platform"`
+	Manifest                    string `json:"manifest"`
+	DockerHost                  string `json:"docker_host"`
+	DockerRoot                  string `json:"docker_root"`
+	EngineVersion               string `json:"engine_version"`
+	SocketUID                   *int   `json:"socket_uid,omitempty"`
+	SocketGID                   *int   `json:"socket_gid,omitempty"`
+	SessionDir                  string `json:"session_dir"`
+	Listen                      string `json:"listen"`
+	Advertise                   string `json:"advertise"`
+	Socket                      string `json:"socket"`
+	AllowPreparationRead        bool   `json:"allow_preparation_read"`
+	MaxBuffer                   int64  `json:"max_buffer_bytes"`
+	MaxSpool                    int64  `json:"max_spool_bytes"`
+	MaxUpload                   int64  `json:"max_upload_bytes"`
+	SpoolDir                    string `json:"spool_dir"`
+	SourceStreams               int    `json:"source_streams"`
+	SourceJoinMilliseconds      int    `json:"source_join_milliseconds"`
+	TimeoutSeconds              int    `json:"timeout_seconds"`
+	LeaseSeconds                int    `json:"lease_seconds"`
+	ManagedStdin                bool   `json:"managed_stdin"`
 }
 
 func serve(parent context.Context, command string, args []string) (returnErr error) {
@@ -155,6 +159,10 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	fs.StringVar(&p.RegistryConfig, "registry-config", "", "Docker config.json on the fetcher (default Docker config location)")
 	fs.BoolVar(&p.RegistryPlainHTTP, "registry-plain-http", false, "explicitly use plain HTTP for the source registry")
 	fs.Int64Var(&p.RegistryCacheBytes, "registry-cache-bytes", 0, "optional retained compressed-blob disk budget (0 streams without disk cache)")
+	fs.IntVar(&p.RegistryRangeConcurrency, "registry-range-concurrency", 0, "parallel upstream ranges per blob (0 defaults to 4; 1 disables)")
+	fs.Int64Var(&p.RegistryRangeChunkBytes, "registry-range-chunk-bytes", 0, "upstream range size (0 defaults to 16 MiB)")
+	fs.Int64Var(&p.RegistryRangeThresholdBytes, "registry-range-threshold-bytes", 0, "minimum blob size for parallel ranges (0 defaults to 256 MiB)")
+	fs.Int64Var(&p.RegistryRangeBufferBytes, "registry-range-buffer-bytes", 0, "shared range buffer reserved from source memory (0 uses one quarter, capped at 128 MiB)")
 	fs.StringVar(&p.DockerRoot, "docker-root", "", "read-only qualified Docker store root (or containerd content root)")
 	fs.StringVar(&p.EngineVersion, "engine-version", "", "qualified source Docker engine version")
 	fs.StringVar(&p.Image, "image", "", "source image or layout reference")
@@ -262,20 +270,31 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	var nativeSource *source.Native
 	var containerdSource *source.Containerd
 	var registrySource *source.Registry
+	sourceCacheBudget := p.MaxBuffer
 	switch p.Source {
 	case "registry":
 		if p.Image == "" || p.Manifest != "" {
 			return errors.New("registry requires --image and resolves its own pinned manifest")
 		}
+		rangeBudget := p.RegistryRangeBufferBytes
+		if rangeBudget == 0 {
+			rangeBudget = min(p.MaxBuffer/4, 128<<20)
+		}
 		registrySource, err = source.NewRegistry(ctx, source.RegistryOptions{
 			Reference: p.Image, Platform: platform, ConfigPath: p.RegistryConfig, PlainHTTP: p.RegistryPlainHTTP,
 			MaxCacheBytes: p.RegistryCacheBytes, SpoolDir: p.SpoolDir,
+			RangeConcurrency: p.RegistryRangeConcurrency, RangeChunkBytes: p.RegistryRangeChunkBytes,
+			RangeThresholdBytes: p.RegistryRangeThresholdBytes, RangeBufferBytes: rangeBudget,
 		})
 		if err != nil {
 			return err
 		}
 		defer func() { returnErr = errors.Join(returnErr, registrySource.Close()) }()
+		if registrySource.RangeBufferBudget() > p.MaxBuffer-(8<<20) {
+			return errors.New("registry range buffer must leave at least 8 MiB for the source cache")
+		}
 		im, src = registrySource.Image, registrySource
+		sourceCacheBudget -= registrySource.RangeBufferBudget()
 
 	case "docker-containerd":
 		if p.DockerRoot == "" || p.Manifest != "" {
@@ -366,7 +385,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 		}
 		return os.WriteFile(*output, im.Manifest, 0600)
 	}
-	cache, err := transfer.NewSource(ctx, src, p.MaxBuffer, p.SourceStreams)
+	cache, err := transfer.NewSource(ctx, src, sourceCacheBudget, p.SourceStreams)
 	if err != nil {
 		return err
 	}
