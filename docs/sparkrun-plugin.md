@@ -50,7 +50,7 @@ plugins:
     allow_preparation_read: true  # Default; set false to prohibit full preparation.
     transport: auto
     registry_source: true  # Default; overlap missing-image pulls with distribution.
-    registry_cache_bytes: 0  # Optional separate disk budget for retained compressed blobs.
+    registry_cache_bytes: 17179869184  # Up to 16 GiB disk; keep 16 GiB free. Zero disables.
     # Optional development override; releases download verified binaries:
     # development_binary: /absolute/path/to/oci-relay
 ```
@@ -119,12 +119,56 @@ blob fails the acquisition and requires a whole-blob retry. TLS identity errors,
 protocol errors and receiver digest mismatches fail validation. Source and
 receiver SHA-256 checks remain enabled. Per-path payload bytes, requests,
 failures and peak active requests are included in receiver results and logs.
-This is layer-level distribution, not within-layer piece striping or RDMA.
 `connections_per_path: 1` is the default; values 2–4 open additional independent
 HTTP/2 connections on each configured path without increasing acquisition or
 buffer budgets. This also works with a single configured path and lets you
 separate connection contention from the benefit of another NIC. Counters include
 the connection number; a network failure disables that connection for the session.
+
+With a stripe-capable binary at both ends, layers **at least 256 MiB** use
+within-layer striping whenever two or more qualified connections are available.
+Alternating 1 MiB pieces travel over up to four distinct connections, preferring
+different links. One source acquisition supplies every lane, including live
+registry streams and reconstructed classic-store tar streams: striping does not
+fetch the layer separately for each connection or stage another payload file.
+Receivers reassemble pieces in order into the existing cache and SHA-256 verifier.
+Source verification still withholds the layer tail; corruption cannot complete
+an import. A failed lane cancels that layer acquisition and retries the whole
+layer on surviving connections. Piece-level resume is not implemented.
+
+`stripe_threshold_bytes` overrides the threshold (0 disables; otherwise 8 MiB
+to 1 PiB). `stripe_streams` sets the per-layer connection cap (2–8, default 4).
+`stripe_piece_bytes` sets the piece size (powers of two from 1–64 MiB, default
+1 MiB). The source advertises its supported maximum; a source with the original
+striping implementation uses 1 MiB even when a larger size is requested. The
+receiver limits lane count to the number of full pieces in the layer and uses
+an ordinary stream when fewer than two fit. Results include effective
+`stripe_piece_bytes` on each used connection.
+The cap does not create connections: use both configured paths, or increase
+`connections_per_path` on a single path. Small layers, one remaining connection,
+SSH transports without explicit paths, and older sources use ordinary streams.
+Stripe and receive-window overrides require a supporting binary; default plugin settings
+remain compatible with older releases. Results expose `stripe_requests` per
+connection. No RDMA transport is included.
+
+The existing managed payload-memory and acquisition limits still apply. Stripe
+readers share source cache frames and the receiver needs no separate reassembly
+ring; HTTP/2/TLS/socket buffers remain additional bounded transport overhead,
+as with ordinary transfers. Slow lanes backpressure the source and eventually
+fail under the existing lag/write deadlines. Incomplete lane groups expire and
+release their readers; session cleanup also cancels outstanding groups.
+
+For controlled transport experiments, `http2_stream_window_bytes` overrides the
+HTTP/2 receive credit **per stream** (0 preserves Go's default; otherwise powers
+of two from 1–64 MiB). The pinned Go toolchain defaults to 4 MiB per stream.
+This is not a total-memory budget: larger windows permit more buffered data on
+each active stripe, in addition to the managed relay cache and other overhead.
+For example, four active lanes with 32 MiB windows can buffer up to 128 MiB for
+one layer; several concurrent layers multiply that allowance. The plugin does
+not automatically enlarge these windows. Per-path results expose an explicit
+override as `http2_stream_window_bytes`. Benchmark piece size and receive window
+together before changing either; pieces are portions of persistent streams,
+not separate TCP packets or HTTP requests.
 
 ## Setup and adaptive resource limits
 
@@ -145,7 +189,7 @@ or a runtime congestion controller:
 |---|---:|---:|
 | Unknown / below 25 Gbps | 128 MiB | 4 |
 | 25–99 Gbps | 256 MiB | 8 |
-| 100–199 Gbps | 512 MiB | 16 |
+| 100–199 Gbps | 1 GiB | 16 |
 | 200+ Gbps | 1 GiB | 32 |
 
 Automatic buffers consume at most one sixteenth of reported available memory,
@@ -249,3 +293,9 @@ Standalone equivalents are `serve --source-join-milliseconds`,
 variable for standalone relay processes. Results report `import_method`,
 `reused_layers`, `import_archive_bytes`, and `load_seconds`. Download/extraction
 progress times remain zero for load, which does not expose those phases.
+
+## Bundled receiver decoder
+
+New native release bundles include a private, verified `unpigz` helper. The
+plugin automatically selects it for missing gzip layers on overlay2 receivers
+when disk headroom permits. See [selection, budgets and settings](bundled-decoder.md).

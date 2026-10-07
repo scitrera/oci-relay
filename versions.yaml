@@ -1,6 +1,6 @@
 # Canonical release versions and generated GitHub CI configuration.
-oci-relay: 0.1.0
-sparkrun-oci-relay-plugin: 0.1.0
+oci-relay: 0.2.0
+sparkrun-oci-relay-plugin: 0.2.0
 
 go_toolchain:
   go: "1.25.0"
@@ -18,7 +18,7 @@ preferred_versions:
     ruff: "0.15.6"
 
 ci:
-  repo_tools_source: "git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424"
+  repo_tools_source: "git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23"
   check_generated_ci: true
   test_branches: [main, develop-next]
   only_workflows: [version-check, test-go, test-python, publish-go]
@@ -42,6 +42,16 @@ ci:
         project: oci-relay
         package: ./cmd/oci-relay
         ldflags: "-s -w -buildid= -X github.com/scitrera/oci-relay/internal/buildinfo.Version=$VERSION -X github.com/scitrera/oci-relay/internal/buildinfo.Commit=$COMMIT"
+        platform_runners:
+          linux/amd64: ubuntu-24.04
+          linux/arm64: ubuntu-24.04-arm
+          darwin/arm64: macos-15
+        setup_steps:
+          - name: Check native build prerequisites
+            run: python3 --version && cc --version && make --version
+          - name: Test Go on the native target
+            run: go test -race -count=1 ./...
+        package_command: python3 scripts/build-decoder.py
         extra_files: [LICENSE, LICENSE_EXCEPTION, COPYRIGHT, README.md, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt]
   python:
     test_versions: ["3.12", "3.13"]

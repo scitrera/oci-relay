@@ -26,13 +26,16 @@ type Path struct {
 
 type PathMetrics struct {
 	Path
-	Connection int   `json:"connection"`
-	Bytes      int64 `json:"bytes"`
-	Requests   int64 `json:"requests"`
-	Failures   int64 `json:"failures"`
-	Active     int64 `json:"active"`
-	PeakActive int64 `json:"peak_active"`
-	Disabled   bool  `json:"disabled"`
+	Connection             int   `json:"connection"`
+	Bytes                  int64 `json:"bytes"`
+	Requests               int64 `json:"requests"`
+	StripeRequests         int64 `json:"stripe_requests,omitempty"`
+	StripePieceBytes       int64 `json:"stripe_piece_bytes,omitempty"`
+	HTTP2StreamWindowBytes int64 `json:"http2_stream_window_bytes,omitempty"`
+	Failures               int64 `json:"failures"`
+	Active                 int64 `json:"active"`
+	PeakActive             int64 `json:"peak_active"`
+	Disabled               bool  `json:"disabled"`
 }
 type dataPath struct {
 	client   *Client
@@ -72,7 +75,7 @@ func NewPathClientConnections(paths []Path, credentials Credentials, connections
 	if connections < 1 || connections > 4 {
 		return nil, errors.New("connections per path must be between 1 and 4")
 	}
-	c := &Client{Credentials: credentials, Endpoint: paths[0].Endpoint, paths: &pathPool{}}
+	c := &Client{Credentials: credentials, Endpoint: paths[0].Endpoint, paths: &pathPool{}, StripeThreshold: 256 << 20, StripeStreams: 4}
 	seen := map[Path]bool{}
 	for _, path := range paths {
 		ip := net.ParseIP(path.LocalAddress)

@@ -66,6 +66,11 @@ def main():
     parser.add_argument("--receiver-docker-host", help="isolated unix:///tmp/.../docker.sock; omit for transfer")
     parser.add_argument("--data-paths", help="private JSON file containing plugin data_paths host-to-IP maps")
     parser.add_argument("--connections-per-path", type=int, choices=range(1, 5), default=1)
+    parser.add_argument("--stripe-threshold-bytes", type=int, default=256 << 20)
+    parser.add_argument("--stripe-streams", type=int, choices=range(2, 9), default=4)
+    parser.add_argument("--stripe-piece-bytes", type=int, default=1 << 20)
+    parser.add_argument("--http2-stream-window-bytes", type=int, default=0)
+    parser.add_argument("--max-buffer-bytes", type=int)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--manifest", help="omit to measure full preparation read")
     parser.add_argument("--layout", help="pre-exported OCI layout instead of the Docker push source")
@@ -118,6 +123,7 @@ def main():
         "receiver_import": "none" if args.method == "transfer" else args.receiver_import,
         "relay_gomaxprocs": args.relay_gomaxprocs, "source_streams_override": args.source_streams,
         "connections_per_path": args.connections_per_path,
+        "stripe_threshold_bytes": args.stripe_threshold_bytes, "stripe_streams": args.stripe_streams, "stripe_piece_bytes": args.stripe_piece_bytes, "http2_stream_window_bytes": args.http2_stream_window_bytes,
     }
     maps = json.loads(Path(args.data_paths).read_text()) if args.data_paths else None
     stop_heartbeat = threading.Event()
@@ -148,7 +154,10 @@ def main():
                 "source_join_milliseconds": args.source_join_milliseconds,
                 "receiver_import": args.receiver_import, "max_import_bytes": args.max_import_bytes,
                 "relay_gomaxprocs": args.relay_gomaxprocs,
+                "stripe_threshold_bytes": args.stripe_threshold_bytes, "stripe_streams": args.stripe_streams, "stripe_piece_bytes": args.stripe_piece_bytes, "http2_stream_window_bytes": args.http2_stream_window_bytes,
             }
+            if args.max_buffer_bytes is not None:
+                settings["max_buffer_bytes"] = args.max_buffer_bytes
             if args.network_gbps is not None:
                 settings["network_gbps"] = args.network_gbps
             if args.source_streams is not None:
@@ -215,6 +224,8 @@ def main():
 
             result["interface_counters_before"] = interface_counters()
             tuning = {"network_gbps": args.network_gbps} if args.network_gbps is not None else {}
+            if args.max_buffer_bytes is not None:
+                tuning["max_buffer_bytes"] = args.max_buffer_bytes
             if args.source_streams is not None:
                 tuning["source_streams"] = args.source_streams
             source_limits = limits(tuning, source_facts, "http2-direct")
@@ -274,6 +285,8 @@ def main():
                         remote_binaries[host], "peer", *(path_arguments(data_paths[host],
                             int(ready["endpoint"].rsplit(":", 1)[1])) if host in data_paths else ["--endpoint", ready["endpoint"]]),
                         "--session", credential_files[host],
+                        "--stripe-threshold-bytes", str(args.stripe_threshold_bytes), "--stripe-streams", str(args.stripe_streams), "--stripe-piece-bytes", str(args.stripe_piece_bytes),
+                        "--http2-stream-window-bytes", str(args.http2_stream_window_bytes),
                         *(["--connections-per-path", str(args.connections_per_path)] if host in data_paths else []),
                         *(["--transfer-only"] if args.method == "transfer" else ["--docker-host", args.receiver_docker_host, "--tag", args.image]),
                         "--max-buffer-bytes", str(target_limits[host]["max_buffer_bytes"]),

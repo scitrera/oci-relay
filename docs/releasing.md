@@ -10,7 +10,13 @@ do not edit generated workflow YAML independently.
 2. Run the opt-in Docker and Sparkrun plugin tests. Qualify each advertised
    Docker store/architecture and route, recording evidence in validation.md.
    Inspect cancellation, failed receivers, cleanup and large-upload rejection.
-3. Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE, LICENSE_EXCEPTION,
+3. Build helpers on native runners only: Linux AMD64 `ubuntu-24.04`, Linux
+   ARM64 `ubuntu-24.04-arm`, and macOS ARM64 `macos-15`. The repo-tools binary
+   package hook builds source-pinned musl/zlib/pigz, executes tests, and adds
+   `unpigz`, `bundle.json` and `UNPIGZ_LICENSES.txt`. No QEMU or cross-architecture
+   helper execution. Dispatch the publish workflow before tagging to validate
+   native artifacts. Review source pins in `scripts/native-dependencies.json`.
+   Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE, LICENSE_EXCEPTION,
    COPYRIGHT and dependency notices are included in every binary archive.
    Verify plugin wheels and vendored copies contain the AGPL license/exception.
 4. Review and commit the source and generated CI, then push to the public repository. A matching `vVERSION` tag triggers Linux amd64/arm64 archive builds plus

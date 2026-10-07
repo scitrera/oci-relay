@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-SOURCE = "git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424"
+SOURCE = "git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23"
 local = Path(os.environ.get("SCITRERA_REPO_TOOLS", "~/scitrera-repo-tools")).expanduser()
 env = os.environ.copy()
 if (local / "src/scitrera_repo_tools").is_dir():

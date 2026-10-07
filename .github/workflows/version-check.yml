@@ -28,7 +28,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
 
       - name: Verify versions are in sync
-        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424' sync-versions --check --verbose
+        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23' sync-versions --check --verbose
 
       - name: Verify generated workflows
-        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424' generate-ci-gha --check
+        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23' generate-ci-gha --check

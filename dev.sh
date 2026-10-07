@@ -57,6 +57,8 @@ _oci_relay_dev_setup() {
     fi
     binary="$script_dir/bin/oci-relay"
     mv -f -- "$temporary" "$binary" || return 1
+    echo "Building or verifying the native bundled decoder ..."
+    "$venv_dir/bin/python" "$script_dir/scripts/build-decoder.py" --stage "$script_dir/bin" --reuse || return 1
     "$venv_dir/bin/python" "$script_dir/scripts/dev-environment.py" configure \
         --destination "$config_dir" --base "$base_config" --binary "$binary" || return 1
     SPARKRUN_CONFIG_DIR="$config_dir" SPARKRUN_APPLICATION_CONFIG="$config_dir/config.yaml" \

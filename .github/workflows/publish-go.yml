@@ -26,14 +26,14 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
 
       - name: Verify versions are in sync
-        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424' sync-versions --check --verbose
+        run: uvx --from 'git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23' sync-versions --check --verbose
 
       - name: Compare tag against versions.yaml
         if: github.ref_type == 'tag'
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          declared="$(uvx --from 'git+https://github.com/scitrera/repo-tools.git@02e9f133f2a01c283e474052430b61cac2ded424' sync-versions --print-version oci-relay)"
+          declared="$(uvx --from 'git+https://github.com/scitrera/repo-tools.git@898be3f3408a0da7d5dee81d8752c06d2ac7bf23' sync-versions --print-version oci-relay)"
           if [ "$tag" != "$declared" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match the oci-relay version declared in versions.yaml ($declared)"
             exit 1
@@ -42,7 +42,7 @@ jobs:
 
   build-oci-relay:
     name: Build oci-relay (${{ matrix.goos }}/${{ matrix.goarch }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: [ tests, verify-tag ]
     strategy:
       # One unsupported target must not withhold the assets for every other
@@ -50,9 +50,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: darwin, goarch: arm64 }
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: arm64, runner: macos-15 }
     steps:
       - uses: actions/checkout@v7
 
@@ -61,6 +61,16 @@ jobs:
           go-version: '1.25.14'
           cache-dependency-path: ./go.sum
 
+
+      - name: Check native build prerequisites
+        run: |
+          python3 --version && cc --version && make --version
+        working-directory: .
+
+      - name: Test Go on the native target
+        run: |
+          go test -race -count=1 ./...
+        working-directory: .
       - name: Build
         working-directory: .
         env:
@@ -89,6 +99,8 @@ jobs:
           cp "$GITHUB_WORKSPACE/README.md" "$stage/"
           cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/"
           cp "$GITHUB_WORKSPACE/THIRD_PARTY_LICENSES.txt" "$stage/"
+          export BUNDLE_DIR="$stage" VERSION GOOS GOARCH
+          python3 scripts/build-decoder.py
           dist="$GITHUB_WORKSPACE/dist"
           mkdir -p "$dist"
           base="oci-relay_${VERSION}_${GOOS}_${GOARCH}"

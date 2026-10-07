@@ -21,6 +21,7 @@ import (
 	specs "github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
 	"github.com/vbatts/tar-split/tar/asm"
 	"github.com/vbatts/tar-split/tar/storage"
@@ -276,6 +277,11 @@ type nativeGetter struct {
 	ctx  context.Context
 }
 
+// Native layers can contain tens of thousands of small files. Keep those reads
+// buffered: per-file direct-I/O latency outweighed its bulk-read benefit in the
+// CX7 image sweep. Large payloads still bypass page cache on every acquisition.
+const nativeDirectReadMin = 1 << 20
+
 func (g nativeGetter) Get(name string) (io.ReadCloser, error) {
 	if err := g.ctx.Err(); err != nil {
 		return nil, err
@@ -289,7 +295,10 @@ func (g nativeGetter) Get(name string) (io.ReadCloser, error) {
 		f.Close()
 		return nil, errors.New("native payload is not a regular file")
 	}
-	return f, nil
+	if info.Size() < nativeDirectReadMin {
+		return f, nil
+	}
+	return fileio.ReadFile(f), nil
 }
 
 type contextWriter struct {

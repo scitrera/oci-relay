@@ -29,11 +29,14 @@ source dev.sh
 sparkrun --version
 pytest -q
 # Opt-in local Docker lifecycle/transport tests:
-OCI_RELAY_PLUGIN_TESTS=1 pytest -q
+OCI_RELAY_UNPIGZ="$PWD/bin/unpigz" OCI_RELAY_PLUGIN_TESTS=1 pytest -q
 # Run recipes normally using the enabled provider:
 # sparkrun run @official/deepseek-v4-flash-0731-b12x-dspark-vllm
 deactivate
 ```
+
+`dev.sh` also builds a pinned native `unpigz` helper (C compiler and make required);
+see [bundled decoding](bundled-decoder.md).
 
 `dev.sh` requires Bash, `uv`, and Go (on PATH, supplied through `GO`, or installed
 under `~/sdk/go*/bin/go`). It creates `.venv`, installs this plugin and Sparkrun

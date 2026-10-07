@@ -117,6 +117,27 @@ class Runner:
         observed = json.loads(output)
         if observed.get("version") != version or observed.get("protocol") != 1:
             raise OperationError("staged engine version/protocol does not match plugin")
+        if not hasattr(self, "binary_capabilities"):
+            self.binary_capabilities = {}
+        self.binary_capabilities[host] = observed.get("capabilities", [])
+        return destination
+
+    def stage_decoder(self, host, path, digest):
+        destination = f"{self.cache_directory(host)}/helpers/{digest}/unpigz"
+        result = self.connection(host).execute(host or "localhost", ["sha256sum", destination], timeout=30)
+        if result.returncode == 0 and result.stdout.decode().split()[0] == digest:
+            return destination
+        self.execute(host, ["mkdir", "-p", str(Path(destination).parent)])
+        temporary = destination + ".tmp." + uuid.uuid4().hex
+        try:
+            self.connection(host).upload(host or "localhost", [str(path)], temporary)
+            observed = self.execute(host, ["sha256sum", temporary]).decode().split()
+            if not observed or observed[0] != digest or file_digest(path) != digest:
+                raise OperationError("staged decoder checksum mismatch")
+            self.execute(host, ["chmod", "0555", temporary])
+            self.execute(host, ["mv", "-f", temporary, destination])
+        finally:
+            self.connection(host).execute(host or "localhost", ["rm", "-f", "--", temporary], timeout=10)
         return destination
 
     def start_source(self, host, binary, directory, plan):
@@ -190,6 +211,10 @@ class Runner:
         if receiver:
             # Only receivers need the local Docker API for import/finalization.
             mounts.append(("/var/run/docker.sock", "/var/run/docker.sock", True))
+            if "--unpigz" in command:
+                helper = command[command.index("--unpigz") + 1]
+                scratch = command[command.index("--decode-spool-dir") + 1]
+                mounts.extend([(helper, helper, True), (scratch, scratch, False)])
         for source, target, readonly in mounts:
             if not source.startswith("/") or any(c in source for c in ',\n\r\x00'):
                 raise OperationError("invalid native helper bind path")

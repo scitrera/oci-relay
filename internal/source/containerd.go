@@ -17,6 +17,7 @@ import (
 	specs "github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
 )
 
@@ -135,7 +136,9 @@ func (n *Containerd) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) er
 		return errors.New("containerd blob type/size changed")
 	}
 	// transfer.Cache verifies length and full SHA-256 on every acquired blob.
-	_, err = io.Copy(contextWriter{ctx, w}, io.LimitReader(f, d.Size+1))
+	r := fileio.NewReader(f, 0, d.Size+1)
+	defer r.Close()
+	_, err = io.Copy(contextWriter{ctx, w}, r)
 	return err
 }
 

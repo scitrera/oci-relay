@@ -154,9 +154,10 @@ def test_relay_runtime_tuning_does_not_wrap_docker_cli():
     assert calls[1] == LOCAL_DOCKER + ['start', '--attach', 'owned-container']
 
 
+@pytest.mark.parametrize('bundled', [False, True])
 @pytest.mark.parametrize('store', ['overlay2', 'containerd'])
 @pytest.mark.parametrize('version', ['29.0.0', '29.2.1', '30.0.0', '29.1.3-0ubuntu1~24.04.1'])
-def test_receiver_helper_requires_matching_chain_and_only_mounts_local_store(store, version):
+def test_receiver_helper_requires_matching_chain_and_only_mounts_local_store(store, version, bundled):
     import json
     from sparkrun_oci_relay.host import LOCAL_DOCKER, Runner
 
@@ -189,6 +190,8 @@ def test_receiver_helper_requires_matching_chain_and_only_mounts_local_store(sto
     runner.json = lambda host, path, value: inventories.append((path, value))
     runner.start = lambda host, args: calls.append(args)
     args = ['/verified/relay', 'peer', '--stdio']
+    if bundled:
+        args.extend(['--unpigz', '/private/unpigz', '--decode-spool-dir', '/tmp/owned-scratch'])
     inventory = {'diff_ids': layers.copy(), 'platform': {'os': 'linux', 'architecture': 'arm64'}}
     runner.start_receiver('host', args[0], '/tmp/oci-relay.0123456789', args, inventory)
     create = next(a for a in calls if a[:4] == LOCAL_DOCKER + ['create'])
@@ -196,7 +199,10 @@ def test_receiver_helper_requires_matching_chain_and_only_mounts_local_store(sto
     assert create[create.index('--engine-version') + 1] == version
     assert create[-2:] == ['--native-base', image_id]
     mounts = [create[i + 1] for i, value in enumerate(create) if value == '--mount']
-    assert all(m.endswith(',readonly') for m in mounts)
+    assert all(m.endswith(',readonly') for m in mounts if 'owned-scratch' not in m)
+    if bundled:
+        assert 'type=bind,src=/tmp/owned-scratch,dst=/tmp/owned-scratch' in mounts
+        assert 'type=bind,src=/private/unpigz,dst=/private/unpigz,readonly' in mounts
     assert any('src=/var/run/docker.sock,dst=/var/run/docker.sock' in m for m in mounts)
     assert len(runner.containers) == 1
     calls.clear()

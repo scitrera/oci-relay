@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -18,12 +19,13 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, pins
+from . import __version__, pins, decoder
+from .disk import registry_cache_budget
 from .host import Lines, OperationError, Runner, pump
 from .parallel import parallel
 from .paths import arguments as path_arguments, qualify as qualify_paths
 from .progress import PROGRESS, Progress
-from .release import BinaryUnavailable, acquire
+from .release import BinaryUnavailable, acquire, acquire_decoder
 from .source_policy import SourceUnavailable, detect, validate
 from .tuning import limits, probe
 
@@ -238,7 +240,7 @@ class RelayProvider:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 86400:
             raise ValueError("relay timeout must be between 1 and 86400 seconds")
         cached_image = None
-        if not request.dry_run and not request.force_pull and settings.get("source_mode") != "registry":
+        if not request.dry_run and not request.force_pull and settings.get("source_mode") != "registry" and (request.source_host is not None or platform.system() == "Linux"):
             logger.log(PROGRESS, "OCI Relay: checking source image on %s", request.source_host or "controller")
             runner = Runner(request.session, settings)
             try:
@@ -291,6 +293,12 @@ class RelayProvider:
                 settings = dict(settings, source_mode="auto")
         if registry:
             settings = dict(settings, source_mode="registry")
+        if settings.get("source_mode") == "registry" and request.source_host is None and platform.system() != "Linux":
+            # A non-Linux control node coordinates; a Linux receiver fetches
+            # registry data using its own registry credentials and network.
+            if not request.targets:
+                raise ImageDistributionUnsupported("registry relay requires a Linux execution host")
+            request = replace(request, source_host=request.targets[0])
         if settings.get("source_mode") == "registry" and request.offline:
             raise ImageDistributionUnsupported("registry source is unavailable offline")
         # Resolve defaults per copy without changing the user's settings.
@@ -369,6 +377,13 @@ class RelayProvider:
             binaries = parallel(execution_hosts, lambda host: runner.stage_binary(
                 host, *releases[architectures[host]], __version__,
             ))
+            helpers = {}
+            if settings.get("receiver_decoder", "auto") != "none" and settings.get("receiver_import", "pull") == "pull":
+                supported = [host for host in request.targets if "receiver-unpigz-v1" in getattr(runner, "binary_capabilities", {}).get(host, [])]
+                decoders = {arch: acquire_decoder(arch, settings, releases[arch][0])
+                            for arch in dict.fromkeys(architectures[host] for host in supported)}
+                helpers = parallel([host for host in supported if decoders[architectures[host]] is not None],
+                                   lambda host: runner.stage_decoder(host, *decoders[architectures[host]]))
             mark("binaries")
             progress.phase("selecting source and network routes")
             source_host = request.source_host
@@ -467,7 +482,7 @@ class RelayProvider:
             if selection.mode == "registry":
                 plan.update(registry_config=settings.get("registry_config", ""),
                             registry_plain_http=settings.get("registry_plain_http", False),
-                            registry_cache_bytes=settings.get("registry_cache_bytes", 0))
+                            registry_cache_bytes=registry_cache_budget(runner, source_host, plan["spool_dir"], settings))
             mark("session")
             progress.phase("fetching registry manifest and configuration" if selection.mode == "registry"
                            else f"preparing {selection.mode} source")
@@ -582,6 +597,15 @@ class RelayProvider:
                     arguments.append("--stdio")
                 if identity in ready_paths:
                     arguments.extend(["--connections-per-path", str(settings.get("connections_per_path", 1))])
+                # New binaries negotiate striping automatically. Pass overrides
+                # only when requested, keeping default use of older releases valid.
+                for key in ("stripe_threshold_bytes", "stripe_streams", "stripe_piece_bytes", "http2_stream_window_bytes"):
+                    if key in settings:
+                        arguments.extend(["--" + key.replace("_", "-"), str(settings[key])])
+                if "receiver-unpigz-v1" in getattr(runner, "binary_capabilities", {}).get(host, []):
+                    arguments.extend(decoder.arguments(runner, host, helpers.get(host), settings, facts[host], peer_limits))
+                elif settings.get("receiver_decoder") == "unpigz":
+                    raise OperationError("receiver binary lacks bundled decoder capability")
                 process = runner.start_receiver(host, binaries[host], str(Path(target_files[identity]).parent), arguments, ready)
                 peers[identity] = process
                 peer_diagnostics[identity] = Lines(process.stderr)
@@ -637,7 +661,7 @@ class RelayProvider:
                 raise OperationError("source process failed after reporting complete receivers")
             logger.info("OCI Relay receiver timings: %s", {
                 ids[identity]: {name: observation.get(name, 0) for name in (
-                    "pull_seconds", "last_download_seconds", "last_extract_seconds",
+                    "pull_seconds", "last_download_seconds", "last_extract_seconds", "decoder",
                     "import_method", "reused_layers", "import_archive_bytes", "load_seconds",
                     "paths", "store", "local_bytes", "config_digest", "docker_image_id", "installed_manifest_digest",
                     "cached_blob_layers", "discovery_seconds", "discovery_images", "discovery_inspected",

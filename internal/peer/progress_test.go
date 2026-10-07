@@ -15,6 +15,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/transfer"
 )
 
@@ -22,6 +23,46 @@ type progressFixtureSource func(context.Context, v1.Descriptor, io.Writer) error
 
 func (f progressFixtureSource) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error {
 	return f(ctx, d, w)
+}
+
+func TestExtractionProgressTracksOldestActiveLayerAndDeduplicatesCompletion(t *testing.T) {
+	ctx, _, c := fixtureServer(t)
+	p := newReceiverProgress(ctx, c)
+	defer p.close()
+	event := engine.Progress{ID: "abcdef123456", Status: "Extracting"}
+	event.ProgressDetail.Current, event.ProgressDetail.Total = 50, 100
+	p.docker(event)
+	next := event
+	next.ID = "123456abcdef"
+	p.docker(next)
+	got := p.snapshot()
+	if got.ExtractingLayer != event.ID || got.ExtractCurrent != 50 || got.ExtractTotal != 100 || !validProgress(got) {
+		t.Fatalf("bad extraction progress: %+v", got)
+	}
+	event.Status = "Pull complete"
+	p.docker(event)
+	p.docker(event)
+	got = p.snapshot()
+	if got.ExtractingLayer != next.ID || got.ExtractedLayers != 1 {
+		t.Fatalf("bad layer transition: %+v", got)
+	}
+	next.Status = "Pull complete"
+	p.docker(next)
+	got = p.snapshot()
+	if got.ExtractingLayer != "" || got.ExtractCurrent != 0 || got.ExtractedLayers != 2 {
+		t.Fatalf("stale extraction: %+v", got)
+	}
+	for _, id := range []string{"not-a-layer", strings.Repeat("a", 66), "\n"} {
+		p.docker(engine.Progress{ID: id, Status: "Extracting"})
+		bad := got
+		bad.ExtractingLayer = id
+		if validProgress(bad) {
+			t.Fatal("accepted invalid layer ID")
+		}
+	}
+	if p.snapshot().ExtractingLayer != "" {
+		t.Fatal("accepted invalid Docker layer ID")
+	}
 }
 
 func TestProgressCountsUniqueOffsetsAcrossConcurrentReplays(t *testing.T) {

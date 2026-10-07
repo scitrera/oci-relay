@@ -18,6 +18,10 @@ are receivers. Normal `auto` selection chooses delegated when the controller
 has no local IB link, but explicit delegated mode also avoids a fallback to a
 controller-local source. Registry credentials must be available on the fetcher.
 
+The updated plugin also selects the first Linux receiver as registry fetcher
+when a non-Linux controller has no explicit source host. That host must have the
+registry credentials; controller credentials are not silently forwarded.
+
 `push` and controller-local source paths do need a relay on the controller.
 The v0.1.0 plugin currently accepts **Linux execution hosts only**: architecture
 detection, binary verification/staging, native Docker helpers and route probes
@@ -57,3 +61,8 @@ For Windows control machines, running Sparkrun under WSL with delegated Linux
 execution avoids the need for a native Windows relay. This is an architectural
 path, not a claim of completed Windows controller qualification. Native Windows
 Sparkrun/SSH process support is a separate concern from Go cross-compilation.
+
+New bundle workflows build and execute tests natively on Linux AMD64, Linux
+ARM64 and macOS ARM64. This supersedes the v0.1.0 cross-build arrangement; it
+does not imply Docker Desktop or native Windows execution qualification.
+See [bundled decoder builds](bundled-decoder.md).

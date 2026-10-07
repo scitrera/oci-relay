@@ -62,8 +62,24 @@ To bind and distribute across paths, replace `--endpoint` with repeated flags:
 ```sh
 oci-relay peer --session /private/node1.json --transfer-only \
   --path https://192.0.2.1:9443,192.0.2.2 \
-  --path https://198.51.100.1:9443,198.51.100.2
+  --path https://198.51.100.1:9443,198.51.100.2 \
+  --connections-per-path 2
 ```
+
+With a capable source, layers at least 256 MiB are striped into alternating
+1 MiB pieces over up to four available connections. `--stripe-threshold-bytes 0`
+disables this for comparisons; nonzero thresholds must be 8 MiB–1 PiB.
+`--stripe-streams` sets the connection cap per layer (2–8, default 4).
+`--stripe-piece-bytes` selects a power-of-two size from 1–64 MiB (default 1 MiB).
+It negotiates the effective size with the source; original stripe-capable sources
+fall back to 1 MiB. Per-path `stripe_piece_bytes` reports the effective value.
+The experimental `--http2-stream-window-bytes` changes receive credit per stream
+(0 preserves Go's default, otherwise powers of two from 1–64 MiB). It permits
+additional transport buffering beyond `--max-buffer-bytes`; account for every
+concurrent layer and lane. The benchmark accepts the same flag for comparisons.
+One source acquisition feeds all pieces; both source and receiver still verify
+the full layer digest. Small layers and peers without striping support retain
+whole-layer transfers. A lost lane requires a whole-layer retry, not piece resume.
 
 `scripts/benchmark-image.py transfer` coordinates this on explicit hosts, with
 `--source-mode docker-classic` for the existing native source. It requires no
@@ -74,3 +90,7 @@ settings when comparing one and two links. Results include per-path counters
 and interface RX/TX snapshots; they contain private host/network identifiers and
 should be kept outside the repository. Transfer time still includes source reads,
 reconstruction, TLS and hashing; it is not a raw network-capacity measurement.
+The benchmark also accepts `--stripe-threshold-bytes`, `--stripe-streams`, `--stripe-piece-bytes`, and
+`--max-buffer-bytes` for matched comparisons. See
+[plugin transport details](sparkrun-plugin.md#multiple-data-paths) for memory
+accounting, source compatibility, and automatic fallback.

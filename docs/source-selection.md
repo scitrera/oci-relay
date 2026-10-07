@@ -37,7 +37,8 @@ mode never uses the registry. The fetcher need not import the image unless it is
 also a destination; delegated mode includes the head among receivers. Set
 `registry_source: false` to disable automatic selection, or `source_mode: registry`
 to explicitly choose it. Credentials stay on the fetcher and
-`registry_cache_bytes` is a separate optional compressed-blob disk budget.
+`registry_cache_bytes` is a separate compressed-blob disk budget, defaulting to
+16 GiB in the plugin with a 16 GiB free-space floor; zero disables retention.
 See [registry sources](registry-source.md) for compatibility and limits.
 
 ## Local-image decision order
@@ -81,6 +82,36 @@ Archive auto-selection is intentionally conservative:
   size, conservatively allowing for relay staging and Docker export scratch
   even when the two directories share a filesystem. Failed or unknown disk/size
   probes rule out auto staging. Free space is not reserved and can change.
+
+## Bulk reads and source pipelining
+
+On Linux, bulk local-file reads prefer aligned `O_DIRECT` I/O, including native
+overlay2 payloads, containerd content, OCI layouts, staged archive sections and
+retained registry blobs. Native overlay2 payload files below **1 MiB** remain
+buffered: direct I/O for each small file substantially slowed reconstruction in
+the real-image cutoff sweep. Larger native files use direct reads regardless of
+page-cache warmth. Metadata reads and all staging writes remain buffered.
+The reader opens an independent descriptor for the already validated
+inode, preserving root confinement, pinned files after unlink, and concurrent
+section reads. It does not change Docker's descriptors, daemon settings or
+global page cache. Unsupported filesystems, alignment or descriptor reopening
+fall back to buffered reads; genuine I/O errors still fail the acquisition.
+Other operating systems use buffered reads.
+
+Direct reads use at most 1 MiB plus alignment padding (less than 64 KiB) of
+scratch space per active file reader; small files use smaller aligned buffers.
+This bounded scratch space is separate from the managed transfer ring, like
+other source, TLS and runtime allocations. Native reconstruction opens payload
+files sequentially within each active layer acquisition.
+
+The source overlaps reads and tar reconstruction/CRC checks with SHA-256 and
+cache writes using four 64 KiB queue frames per acquisition. Those frames are
+reserved **inside** `max_buffer_bytes`. Budgets below 1 MiB per acquisition use
+the synchronous path. Receiver caches retain their existing synchronous path.
+Every full-layer SHA check and native tar-split CRC check remains enabled, and
+the final frame remains withheld until both source completion and SHA verification
+succeed. This requires an updated relay binary; plugin settings alone do not
+enable it in older releases.
 
 ## Failures, identity and observations
 

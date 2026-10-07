@@ -84,6 +84,68 @@ func (f *registryFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func registryOptions(server *httptest.Server) RegistryOptions {
 	return RegistryOptions{Reference: strings.TrimPrefix(server.URL, "http://") + "/test/image:latest", PlainHTTP: true, Credentials: &RegistryCredentials{}}
 }
+
+func TestRegistryUnavailableRetentionContinuesVerifiedStreaming(t *testing.T) {
+	f := newRegistryFixture(t)
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	opts := registryOptions(srv)
+	opts.MaxCacheBytes = int64(len(f.blob))
+	opts.SpoolDir = t.TempDir()
+	r, err := NewRegistry(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// Deterministically fail file creation without filling the test filesystem.
+	if err = os.Remove(r.dir); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		var got bytes.Buffer
+		if err = r.Fetch(context.Background(), r.Image.Descriptors[1], &got); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Bytes(), f.blob) {
+			t.Fatal("lost streamed bytes on cache failure")
+		}
+	}
+	m := r.Metrics()
+	if m.Downloads != 2 || m.CacheWriteErrors != 1 || m.CacheHits != 0 || m.CacheReservedBytes != 0 {
+		t.Fatalf("cache failure accounting: %+v", m)
+	}
+}
+
+func TestRegistryCacheDirectoryFailureIsOptional(t *testing.T) {
+	f := newRegistryFixture(t)
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	opts := registryOptions(srv)
+	opts.MaxCacheBytes = int64(len(f.blob))
+	opts.SpoolDir = filepath.Join(t.TempDir(), "absent")
+	r, err := NewRegistry(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err = r.Fetch(context.Background(), r.Image.Descriptors[1], io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if r.Metrics().CacheWriteErrors != 1 || r.Metrics().CacheBypasses != 1 || r.dir != "" {
+		t.Fatal(r.Metrics())
+	}
+}
+
+type shortCacheWriter struct{}
+
+func (shortCacheWriter) Write(p []byte) (int, error) { return len(p) / 2, nil }
+
+func TestOptionalCacheShortWriteDoesNotInterruptStream(t *testing.T) {
+	w := &optionalCacheWriter{file: shortCacheWriter{}}
+	if n, err := w.Write([]byte("fixture")); n != 7 || err != nil || w.err != io.ErrShortWrite {
+		t.Fatalf("short cache write: %d %v %v", n, err, w.err)
+	}
+}
 func TestRegistryPinnedStreamingAndRetainedCache(t *testing.T) {
 	f := newRegistryFixture(t)
 	first, finish := make(chan struct{}), make(chan struct{})
@@ -477,8 +539,8 @@ func TestRegistryDiskWriteFailureDoesNotPublishCache(t *testing.T) {
 	if err = os.Remove(r.dir); err != nil {
 		t.Fatal(err)
 	}
-	if err = r.Fetch(context.Background(), r.Image.Descriptors[1], io.Discard); err == nil {
-		t.Fatal("failed cache write succeeded")
+	if err = r.Fetch(context.Background(), r.Image.Descriptors[1], io.Discard); err != nil {
+		t.Fatal("optional cache failure broke streaming", err)
 	}
 	if r.Metrics().CacheReservedBytes != 0 || len(r.blobs) != 0 {
 		t.Fatal("failed reservation retained")

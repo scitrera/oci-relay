@@ -49,6 +49,7 @@ type Cache struct {
 	slots                                                          *backpressure.Semaphore
 	maxSlots                                                       int
 	chunks                                                         int
+	pipelineFrames                                                 int
 	mu                                                             sync.Mutex
 	entries                                                        map[digest.Digest]*entry
 	live                                                           map[*entry]bool
@@ -86,6 +87,7 @@ type entry struct {
 	done     bool
 	err      error
 	readers  int
+	joined   int // Logical consumers; stripe lanes do not count as extra receivers.
 	active   map[*reader]bool
 	created  time.Time
 }
@@ -97,6 +99,18 @@ func New(ctx context.Context, source Source, memory int64, parallel int) (*Cache
 	ctx, cancel := context.WithCancel(ctx)
 	return &Cache{ctx: ctx, cancel: cancel, source: source, maxSlots: parallel, chunks: int(memory / int64(parallel*FrameSize)), entries: map[digest.Digest]*entry{}, live: map[*entry]bool{}, seen: map[digest.Digest]bool{}, rate: stats.NewRollingWindow(64), LagTimeout: 30 * time.Second, started: time.Now(),
 		slots: backpressure.NewSemaphore(1, parallel, backpressure.SemaphoreShortTimeout(time.Minute), backpressure.SemaphoreLongTimeout(10*time.Minute))}, nil
+}
+
+// NewSource overlaps source reads/reconstruction with hashing and cache writes.
+// Its queue is reserved from the same memory budget, never added to it. Very
+// small budgets keep the synchronous path to preserve a useful retained window.
+func NewSource(ctx context.Context, source Source, memory int64, parallel int) (*Cache, error) {
+	c, err := New(ctx, source, memory, parallel)
+	if err == nil && c.chunks >= 16 {
+		c.pipelineFrames = 4
+		c.chunks -= c.pipelineFrames
+	}
+	return c, err
 }
 func (c *Cache) Close() { c.mu.Lock(); c.cancel(); c.mu.Unlock(); c.wg.Wait(); c.slots.Close() }
 func (c *Cache) Metrics() Metrics {
@@ -139,6 +153,7 @@ func (c *Cache) Open(ctx context.Context, d v1.Descriptor) (io.ReadCloser, error
 			if e.base == 0 && e.err == nil && (e.done || e.ctx.Err() == nil) {
 				r := &reader{ctx: ctx, e: e}
 				e.readers++
+				e.joined++
 				e.active[r] = true
 				e.notify()
 				e.mu.Unlock()
@@ -198,7 +213,7 @@ func (c *Cache) Open(ctx context.Context, d v1.Descriptor) (io.ReadCloser, error
 				return nil, ctx.Err()
 			}
 		}
-		e := &entry{cache: c, desc: d, changed: make(chan struct{}), readers: 1, active: map[*reader]bool{}, created: time.Now()}
+		e := &entry{cache: c, desc: d, changed: make(chan struct{}), readers: 1, joined: 1, active: map[*reader]bool{}, created: time.Now()}
 		e.ctx, e.cancel = context.WithCancel(c.ctx)
 		r := &reader{ctx: ctx, e: e}
 		e.active[r] = true
@@ -229,12 +244,13 @@ func (c *Cache) produce(e *entry) {
 		}
 		start := time.Now()
 		w := &producer{e: e, hash: sha256.New()}
-		err = c.source.Fetch(e.ctx, e.desc, w)
-		if err == nil && w.n != e.desc.Size {
-			err = fmt.Errorf("blob length mismatch: got %d, expected %d", w.n, e.desc.Size)
+		if c.pipelineFrames > 0 {
+			err = c.fetchPipelined(e, w)
+		} else {
+			err = c.source.Fetch(e.ctx, e.desc, w)
 		}
-		if err == nil && "sha256:"+hex.EncodeToString(w.hash.Sum(nil)) != string(e.desc.Digest) {
-			err = errors.New("blob digest mismatch")
+		if err == nil {
+			err = w.verify()
 		}
 		if err == nil {
 			c.rate.Add(float64(w.n) / time.Since(start).Seconds())
@@ -262,6 +278,26 @@ type producer struct {
 	e    *entry
 	hash hash.Hash
 	n    int64
+}
+
+func (p *producer) verify() error {
+	if err := p.e.ctx.Err(); err != nil {
+		return err
+	}
+	if p.n != p.e.desc.Size {
+		return fmt.Errorf("blob length mismatch: got %d, expected %d", p.n, p.e.desc.Size)
+	}
+	if "sha256:"+hex.EncodeToString(p.hash.Sum(nil)) != string(p.e.desc.Digest) {
+		return errors.New("blob digest mismatch")
+	}
+	return nil
+}
+
+func (p *producer) verifier(d v1.Descriptor) func() error {
+	if d.Digest != p.e.desc.Digest || d.Size != p.e.desc.Size {
+		return nil
+	}
+	return p.verify
 }
 
 func (p *producer) Write(b []byte) (int, error) {
@@ -372,7 +408,7 @@ func (e *entry) join() error {
 			e.cache.joinNanos.Add(time.Since(started).Nanoseconds())
 		}
 	}()
-	for e.readers < e.cache.JoinReaders && time.Until(deadline) > 0 {
+	for e.joined < e.cache.JoinReaders && time.Until(deadline) > 0 {
 		if started.IsZero() {
 			started = time.Now()
 			e.cache.joinWaits.Add(1)
@@ -395,11 +431,13 @@ func (e *entry) join() error {
 }
 
 type reader struct {
-	ctx    context.Context
-	e      *entry
-	offset int64
-	closed bool
-	err    error
+	ctx         context.Context
+	e           *entry
+	offset      int64
+	closed      bool
+	err         error
+	stripeSize  int64
+	stripeCount int
 }
 
 func (r *reader) Read(b []byte) (int, error) {
@@ -435,6 +473,9 @@ func (r *reader) Read(b []byte) (int, error) {
 			offset := int((r.offset - e.base) % FrameSize)
 			available := e.chunks[index][offset:]
 			n := min(len(b), len(available))
+			if r.stripeCount > 1 {
+				n = min(n, int(r.stripeSize-r.offset%r.stripeSize))
+			}
 			// Withhold the tail until the entire descriptor is verified.
 			if r.offset+int64(n) == e.desc.Size && !e.done {
 				ch := e.changed
@@ -450,6 +491,9 @@ func (r *reader) Read(b []byte) (int, error) {
 			}
 			copy(b, available[:n])
 			r.offset += int64(n)
+			if r.stripeCount > 1 && r.offset%r.stripeSize == 0 {
+				r.offset = min(e.desc.Size, r.offset+int64(r.stripeCount-1)*r.stripeSize)
+			}
 			e.notify()
 			e.mu.Unlock()
 			return n, nil

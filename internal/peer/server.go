@@ -23,6 +23,7 @@ import (
 )
 
 type Result struct {
+	Decoder  *DecodeMetrics    `json:"decoder,omitempty"`
 	Progress *ReceiverProgress `json:"progress,omitempty"`
 	// ImageID is the protocol-1 config-digest identity, not Docker's backend ID.
 	ConfigDigest        string           `json:"config_digest,omitempty"`
@@ -77,6 +78,8 @@ type Server struct {
 	lastLease        atomic.Int64
 	lease            time.Duration
 	done             chan struct{}
+	stripeGroups     map[string]*stripeGroup
+	stripeStreams    chan struct{}
 }
 
 func NewServer(ctx context.Context, sess *Session, im *image.Image, cache *transfer.Cache, bind, socket string, lease time.Duration) (*Server, error) {
@@ -92,7 +95,7 @@ func NewServer(ctx context.Context, sess *Session, im *image.Image, cache *trans
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{Session: sess, Image: im, Cache: cache, Listener: listener, Socket: socket, ctx: ctx, cancel: cancel, streams: make(chan struct{}, 32), results: map[string]Result{}, lease: lease, done: make(chan struct{})}
+	s := &Server{Session: sess, Image: im, Cache: cache, Listener: listener, Socket: socket, ctx: ctx, cancel: cancel, streams: make(chan struct{}, 32), stripeStreams: make(chan struct{}, 256), results: map[string]Result{}, stripeGroups: map[string]*stripeGroup{}, lease: lease, done: make(chan struct{})}
 	s.lastLease.Store(time.Now().UnixNano())
 	s.HTTP = &http.Server{Handler: s, TLSConfig: config, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { _ = s.HTTP.ServeTLS(listener, "", "") }()
@@ -231,7 +234,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(stripingHeader, "1")
+		w.Header().Set(stripePieceHeader, formatSize(maxStripePiece))
 		_ = json.NewEncoder(w).Encode(s.Image)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/relay/v1/stripes/") {
+		s.serveStripe(w, r, id)
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/relay/v1/blobs/") || r.Method != http.MethodGet {

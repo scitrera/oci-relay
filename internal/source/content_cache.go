@@ -12,6 +12,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/fileio"
 )
 
 // ContentCache probes only requested CAS paths, retaining open file descriptors
@@ -71,7 +72,9 @@ func (c *ContentCache) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) 
 	if !ok || known.Size != d.Size || known.MediaType != d.MediaType {
 		return errors.New("unprobed content cache descriptor")
 	}
-	_, err := io.Copy(contextWriter{ctx, w}, io.NewSectionReader(c.files[d.Digest], 0, d.Size+1))
+	r := fileio.NewReader(c.files[d.Digest], 0, d.Size+1)
+	defer r.Close()
+	_, err := io.Copy(contextWriter{ctx, w}, r)
 	return err
 }
 

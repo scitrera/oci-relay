@@ -47,7 +47,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "version", "--version":
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion})
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion, "capabilities": []string{"receiver-unpigz-v1"}})
 	case "session":
 		fs := flags("session")
 		dir := fs.String("out", "", "private output directory")
@@ -366,7 +366,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 		}
 		return os.WriteFile(*output, im.Manifest, 0600)
 	}
-	cache, err := transfer.New(ctx, src, p.MaxBuffer, p.SourceStreams)
+	cache, err := transfer.NewSource(ctx, src, p.MaxBuffer, p.SourceStreams)
 	if err != nil {
 		return err
 	}
@@ -499,8 +499,12 @@ func receive(parent context.Context, args []string) error {
 	check := fs.Bool("check", false, "verify source metadata and transport without starting Docker")
 	verify := fs.Bool("transfer-only", false, "download and verify every unique blob without Docker import (reports VERIFIED)")
 	connections := fs.Int("connections-per-path", 1, "independent HTTP/2 connections per explicit data path (1 to 4)")
+	stripeThreshold := fs.Int64("stripe-threshold-bytes", 256<<20, "stripe blobs at or above this size over available connections; 0 disables (otherwise 8 MiB to 1 PiB)")
+	stripeStreams := fs.Int("stripe-streams", 4, "maximum independent connections per striped blob (2 to 8)")
+	stripePiece := fs.Int64("stripe-piece-bytes", 1<<20, "stripe piece size (power of two, 1 to 64 MiB)")
+	http2Window := fs.Int64("http2-stream-window-bytes", 0, "experimental receive window per HTTP/2 stream (0: Go default; powers of two, 1 to 64 MiB); additional transport memory")
 	var paths []peer.Path
-	fs.Func("path", "HTTPS_ENDPOINT,LOCAL_IP data route; repeat to distribute whole layers across links", func(value string) error {
+	fs.Func("path", "HTTPS_ENDPOINT,LOCAL_IP data route; repeat to distribute layers and large-layer stripes across links", func(value string) error {
 		endpoint, local, ok := strings.Cut(value, ",")
 		if !ok {
 			return errors.New("path requires HTTPS_ENDPOINT,LOCAL_IP")
@@ -510,6 +514,12 @@ func receive(parent context.Context, args []string) error {
 	})
 	timeout := fs.Int("timeout-seconds", 3600, "transfer deadline")
 	options := peer.PullOptions{Retries: 2}
+	fs.StringVar(&options.Decode.Mode, "decoder", "none", "receiver decoder: none, auto or unpigz (overlay2 pull)")
+	fs.StringVar(&options.Decode.Helper, "unpigz", "", "absolute verified decoder executable")
+	fs.StringVar(&options.Decode.Directory, "decode-spool-dir", "", "private receiver scratch parent directory")
+	fs.IntVar(&options.Decode.Workers, "decode-workers", 4, "parallel missing-layer decoders (1..16)")
+	fs.Int64Var(&options.Decode.MaxBytes, "max-decode-bytes", 0, "explicit raw layer scratch budget")
+	fs.Int64Var(&options.Decode.ReserveBytes, "decode-reserve-bytes", 16<<30, "disk reserve beyond scratch and Docker import allowance")
 	inventoryPath := fs.String("cache-inventory", "", "private JSON cache discovery hints from the inventory command")
 	fs.StringVar(&options.Tag, "tag", "", "destination image tag")
 	fs.StringVar(&options.DockerHost, "docker-host", "", "local Docker Unix socket")
@@ -529,6 +539,12 @@ func receive(parent context.Context, args []string) error {
 	}
 	if *timeout < 1 || *timeout > 86400 {
 		return errors.New("invalid timeout")
+	}
+	if (*stripeThreshold != 0 && (*stripeThreshold < 8<<20 || *stripeThreshold > 1<<50)) || *stripeStreams < 2 || *stripeStreams > 8 {
+		return errors.New("invalid stripe threshold or stream limit")
+	}
+	if *stripePiece < 1<<20 || *stripePiece > 64<<20 || *stripePiece&(*stripePiece-1) != 0 {
+		return errors.New("stripe piece size must be a power of two between 1 and 64 MiB")
 	}
 	if *inventoryPath != "" {
 		f, err := os.Open(*inventoryPath)
@@ -571,6 +587,11 @@ func receive(parent context.Context, args []string) error {
 		return err
 	}
 	defer c.Close()
+	c.StripeThreshold, c.StripeStreams = *stripeThreshold, *stripeStreams
+	c.StripePieceBytes = *stripePiece
+	if err := c.ConfigureHTTP2Window(*http2Window); err != nil {
+		return err
+	}
 	if *check {
 		im, err := c.Image(ctx)
 		if err != nil {

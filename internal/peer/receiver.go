@@ -11,10 +11,12 @@ import (
 	"github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
 	"github.com/scitrera/oci-relay/internal/transfer"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -24,6 +26,7 @@ type Registry struct {
 	Cache      *transfer.Cache
 	Repository string
 	streams    chan struct{}
+	files      map[digest.Digest]string
 }
 
 func NewRegistry(im *image.Image, c *transfer.Cache, repository string) *Registry {
@@ -80,12 +83,30 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(reg.Image.Config)
 		return
 	}
+	// Docker/containerd can open more blob requests than our active response
+	// limit. Queue them under the request/operation context: containerd treats
+	// a local 429 as a failed pull rather than reliably retrying it. Waiting
+	// requests allocate no payload buffers; Cache still bounds acquisitions.
 	select {
 	case reg.streams <- struct{}{}:
 		defer func() { <-reg.streams }()
-	default:
+	case <-r.Context().Done():
 		w.Header().Del("Content-Length")
-		http.Error(w, "stream limit", 429)
+		http.Error(w, r.Context().Err().Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if path := reg.files[dg]; path != "" {
+		f, err := os.Open(path)
+		if err != nil {
+			w.Header().Del("Content-Length")
+			http.Error(w, "decoded layer unavailable", 500)
+			return
+		}
+		reader := fileio.ReadFile(f)
+		defer reader.Close()
+		if err = CopyResponse(r.Context(), w, reader); err != nil {
+			panic(http.ErrAbortHandler)
+		}
 		return
 	}
 	reader, err := reg.Cache.Open(r.Context(), desc)
@@ -101,6 +122,7 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type PullOptions struct {
+	Decode        DecodeOptions
 	SkipPresent   bool
 	DockerHost    string
 	Tag           string
@@ -152,6 +174,12 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	}
 	if o.Import != "pull" && (o.MaxImport < 4<<20 || o.MaxImport > 1<<50) {
 		return result, errors.New("load import requires an explicit max-import-bytes budget (4 MiB to 1 PiB)")
+	}
+	if err = o.Decode.validate(); err != nil {
+		return result, err
+	}
+	if o.Decode.Mode == "unpigz" && o.Import != "pull" {
+		return result, errors.New("unpigz decoder requires pull import")
 	}
 	im, err := c.Image(ctx)
 	if err != nil {
@@ -238,12 +266,38 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 		return result, err
 	}
 	defer cache.Close()
+	decoded := &decodedLayers{image: view}
+	if o.Decode.Mode != "" && o.Decode.Mode != "none" && o.Import == "pull" {
+		if result.Store == "overlay2" {
+			progress.phase("decoding")
+			decoded, err = prepareDecoded(ctx, view, cache, src.availability, o.Decode)
+			if decoded != nil {
+				result.Decoder = &decoded.metrics
+				defer func() {
+					if ce := decoded.close(); ce != nil {
+						result.CleanupError = errors.Join(errors.New(result.CleanupError), ce).Error()
+					}
+				}()
+			}
+			if err != nil {
+				return result, err
+			}
+			view = decoded.image
+			result.InstalledManifest = string(view.Digest)
+			if err = c.NegotiateLayers(ctx, im, view, result.Store, result.ReusedLayers, decoded.availability); err != nil {
+				return result, err
+			}
+		} else if o.Decode.Mode == "unpigz" {
+			return result, errors.New("unpigz decoder requires overlay2 receiver")
+		}
+	}
+	progress.phase("transferring")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return result, err
 	}
 	repo := "relay/" + c.Credentials.Transfer
-	server := &http.Server{Handler: NewRegistry(view, cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: decoded.registry(cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
 	tempTag := listener.Addr().String() + "/" + repo + ":transfer"
@@ -271,13 +325,12 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	}
 	for attempt := 0; !loaded && attempt <= o.Retries; attempt++ {
 		err = e.Pull(ctx, tempTag, im.Platform, func(p engine.Progress) {
+			progress.docker(p)
 			switch p.Status {
 			case "Download complete":
 				result.LastDownloadSeconds = time.Since(pullStart).Seconds()
 			case "Pull complete":
 				result.LastExtractSeconds = time.Since(pullStart).Seconds()
-			case "Extracting":
-				progress.phase("importing")
 			}
 		})
 		result.PullSeconds = time.Since(pullStart).Seconds()

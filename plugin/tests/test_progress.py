@@ -56,6 +56,36 @@ def test_registry_download_separate_from_receiver_totals(caplog):
     assert "16.0 MiB transferred to receivers; 4 layers reused; registry downloaded 8.0 MiB" in caplog.text
 
 
+def test_extraction_detail_remains_advisory_and_throttled(caplog):
+    caplog.set_level(PROGRESS)
+    p = Progress('fixture:tag')
+    p.bind({'receiver-0': 'spark-a'})
+    try:
+        p.event(event(phase='importing', extracting_layer='abcdef123456', extract_current=1 << 30,
+                      extract_total=2 << 30, extract_seconds=65, extract_update_age_seconds=31, extracted_layers=4))
+        assert 'extracting abcdef123456 50% (1.0 GiB/2.0 GiB input) for 65s, last advance 31s ago' in caplog.text
+        assert '4 layers extracted' in caplog.text
+        count = len(caplog.records)
+        p.event(event(2, 'importing', extracting_layer='abcdef123456', extract_current=2 << 30, extract_total=2 << 30))
+        assert len(caplog.records) == count
+        assert 'image verified' not in caplog.text
+    finally:
+        p.close(False, False)
+
+
+def test_cache_failure_is_visible_once_and_does_not_claim_success(caplog):
+    caplog.set_level(PROGRESS)
+    p = Progress('fixture:tag')
+    try:
+        update = {'registry_metrics': {'upstream_blob_bytes': 1024, 'disk_cache_write_errors': 1}}
+        p.event(update)
+        p.event(update)
+        assert caplog.text.count('registry disk cache write failed; continuing') == 1
+        assert 'complete in' not in caplog.text
+    finally:
+        p.close(False, False)
+
+
 def test_warm_target_and_cleanup_warning(caplog):
     caplog.set_level(PROGRESS)
     p = Progress("fixture:tag")

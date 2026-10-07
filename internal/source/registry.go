@@ -21,7 +21,9 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/scitrera/oci-relay/internal/transfer"
 )
 
 type RegistryOptions struct {
@@ -40,15 +42,19 @@ type RegistryMetrics struct {
 	Downloads              int64 `json:"blob_downloads"`
 	CacheHits              int64 `json:"disk_cache_hits"`
 	CacheBypasses          int64 `json:"disk_cache_bypasses"`
+	CacheWriteErrors       int64 `json:"disk_cache_write_errors"`
 	CacheReservedBytes     int64 `json:"disk_cache_reserved_bytes"`
 	PeakCacheReservedBytes int64 `json:"peak_disk_cache_reserved_bytes"`
 	MetadataBytes          int64 `json:"metadata_bytes"`
+	SharedVerifications    int64 `json:"shared_sha256_verifications"`
+	LocalVerifications     int64 `json:"local_sha256_verifications"`
 }
 
 type registryBlob struct {
-	done chan struct{}
-	path string
-	err  error
+	done        chan struct{}
+	path        string
+	err         error
+	cacheFailed bool
 }
 
 type Registry struct {
@@ -66,6 +72,8 @@ type Registry struct {
 	dir                                           string
 	budget, reserved, peak                        int64
 	upstream, downloads, hits, bypasses, metadata atomic.Int64
+	cacheErrors                                   atomic.Int64
+	sharedVerifications, localVerifications       atomic.Int64
 }
 
 func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, returnErr error) {
@@ -129,7 +137,8 @@ func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, return
 	if r.budget > 0 {
 		r.dir, err = os.MkdirTemp(o.SpoolDir, "oci-relay-registry-")
 		if err != nil {
-			return nil, err
+			r.budget = 0
+			r.cacheErrors.Add(1)
 		}
 	}
 	var expected digest.Digest
@@ -251,6 +260,9 @@ func (r *Registry) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) erro
 	if !ok || known.Size != d.Size {
 		return errors.New("descriptor is not in the pinned registry image")
 	}
+	// Capture ownership before optional disk retention wraps the writer. Only
+	// transfer's private producer/pipeline writers can supply this barrier.
+	verify := transfer.Verifier(w, d)
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -280,17 +292,26 @@ func (r *Registry) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) erro
 		if blob.err != nil {
 			return blob.err
 		}
+		if blob.cacheFailed {
+			r.bypasses.Add(1)
+			return r.download(ctx, d, w, verify)
+		}
 		f, err := os.Open(blob.path)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		reader := fileio.ReadFile(f)
+		defer reader.Close()
 		r.hits.Add(1)
-		_, err = io.CopyBuffer(&contextWriter{ctx: ctx, w: w}, f, make([]byte, 64<<10))
-		return err
+		dst, finish := r.verifyingWriter(d, w, verify)
+		n, err := io.CopyBuffer(&contextWriter{ctx: ctx, w: dst}, io.LimitReader(reader, d.Size+1), make([]byte, 64<<10))
+		if err != nil {
+			return err
+		}
+		return finish(n)
 	}
 	var blob *registryBlob
-	if r.dir != "" && d.Size <= r.budget-r.reserved {
+	if r.dir != "" && r.budget > 0 && d.Size <= r.budget-r.reserved {
 		blob = &registryBlob{done: make(chan struct{}), path: filepath.Join(r.dir, d.Digest.Encoded())}
 		r.blobs[d.Digest] = blob
 		r.reserved += d.Size
@@ -300,25 +321,84 @@ func (r *Registry) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) erro
 	}
 	r.mu.Unlock()
 	if blob == nil {
-		return r.download(ctx, d, w)
+		return r.download(ctx, d, w, verify)
 	}
-	f, err := os.OpenFile(blob.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err == nil {
-		err = r.download(ctx, d, io.MultiWriter(w, f))
-		err = errors.Join(err, f.Close())
+	f, cacheErr := os.OpenFile(blob.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	// Retention is an optimization: disk exhaustion must not break a healthy
+	// upstream stream. Receiver errors and upstream integrity failures still fail.
+	sink := &optionalCacheWriter{file: f, err: cacheErr}
+	err := r.download(ctx, d, io.MultiWriter(w, sink), verify)
+	if f != nil {
+		sink.err = errors.Join(sink.err, f.Close())
 	}
 	r.mu.Lock()
-	if err != nil {
+	if err != nil || sink.err != nil {
 		_ = os.Remove(blob.path)
 		delete(r.blobs, d.Digest)
 		r.reserved -= d.Size
+	}
+	if sink.err != nil {
+		r.cacheErrors.Add(1)
+		blob.cacheFailed = true
+		// Stop trying to fill a filesystem that cannot accept cache writes.
+		r.budget = 0
 	}
 	blob.err = err
 	close(blob.done)
 	r.mu.Unlock()
 	return err
 }
-func (r *Registry) download(ctx context.Context, d v1.Descriptor, w io.Writer) error {
+
+type optionalCacheWriter struct {
+	file io.Writer
+	err  error
+}
+
+func (w *optionalCacheWriter) Write(p []byte) (int, error) {
+	if w.err == nil {
+		var n int
+		n, w.err = w.file.Write(p)
+		if n != len(p) && w.err == nil {
+			w.err = io.ErrShortWrite
+		}
+	}
+	return len(p), nil
+}
+
+// verifyingWriter hashes locally for standalone Fetch callers (including the
+// uncompressed exporter), or waits for the cache's existing SHA pass. Both paths
+// verify disk replays too: successful original publication cannot certify a
+// later read from a damaged file.
+func (r *Registry) verifyingWriter(d v1.Descriptor, w io.Writer, verify func() error) (io.Writer, func(int64) error) {
+	if verify == nil {
+		h := digest.SHA256.Digester()
+		w = io.MultiWriter(w, h.Hash())
+		verify = func() error {
+			if h.Digest() != d.Digest {
+				return errors.New("registry blob digest mismatch")
+			}
+			r.localVerifications.Add(1)
+			return nil
+		}
+	} else {
+		barrier := verify
+		verify = func() error {
+			if err := barrier(); err != nil {
+				return err
+			}
+			r.sharedVerifications.Add(1)
+			return nil
+		}
+	}
+	return w, func(n int64) error {
+		if n != d.Size {
+			return errors.New("registry blob size mismatch")
+		}
+		return verify()
+	}
+}
+
+func (r *Registry) download(ctx context.Context, d v1.Descriptor, w io.Writer, verify func() error) error {
 	resp, err := r.http.get(ctx, r.http.ref.BlobURL(d.Digest.String()), "")
 	if err != nil {
 		return err
@@ -328,11 +408,12 @@ func (r *Registry) download(ctx context.Context, d v1.Descriptor, w io.Writer) e
 		return errors.New("registry blob length mismatch")
 	}
 	r.downloads.Add(1)
-	hash := digest.SHA256.Digester()
+	dst, finish := r.verifyingWriter(d, w, verify)
 	reader := &countRegistryReader{r: io.LimitReader(resp.Body, d.Size), count: &r.upstream}
 	// A source stream may write unverified prefixes; transfer.Cache withholds its
-	// last frame until Fetch returns successfully and its independent hash agrees.
-	n, err := io.CopyBuffer(io.MultiWriter(&contextWriter{ctx: ctx, w: w}, hash.Hash()), reader, make([]byte, 64<<10))
+	// last frame until Fetch returns successfully. The barrier drains queued
+	// writes and verifies their SHA before this download can publish a disk entry.
+	n, err := io.CopyBuffer(&contextWriter{ctx: ctx, w: dst}, reader, make([]byte, 64<<10))
 	if err != nil {
 		return safeRequestError(ctx, err)
 	}
@@ -342,10 +423,7 @@ func (r *Registry) download(ctx context.Context, d v1.Descriptor, w io.Writer) e
 	if extraN != 0 || extraErr != io.EOF {
 		return errors.New("registry blob has excess bytes or no verified end")
 	}
-	if n != d.Size || hash.Digest() != d.Digest {
-		return errors.New("registry blob digest or size mismatch")
-	}
-	return nil
+	return finish(n)
 }
 
 type countRegistryReader struct {
@@ -361,7 +439,7 @@ func (r *countRegistryReader) Read(p []byte) (int, error) {
 func (r *Registry) Metrics() RegistryMetrics {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return RegistryMetrics{UpstreamBytes: r.upstream.Load(), Downloads: r.downloads.Load(), CacheHits: r.hits.Load(), CacheBypasses: r.bypasses.Load(), CacheReservedBytes: r.reserved, PeakCacheReservedBytes: r.peak, MetadataBytes: r.metadata.Load()}
+	return RegistryMetrics{UpstreamBytes: r.upstream.Load(), Downloads: r.downloads.Load(), CacheHits: r.hits.Load(), CacheBypasses: r.bypasses.Load(), CacheWriteErrors: r.cacheErrors.Load(), CacheReservedBytes: r.reserved, PeakCacheReservedBytes: r.peak, MetadataBytes: r.metadata.Load(), SharedVerifications: r.sharedVerifications.Load(), LocalVerifications: r.localVerifications.Load()}
 }
 func (r *Registry) Close() error {
 	r.mu.Lock()

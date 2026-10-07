@@ -79,3 +79,39 @@ def test_connections_require_explicit_paths():
     with pytest.raises(ValueError, match="data_paths"):
         validate({"connections_per_path": 2})
     assert validate({"data_paths": MAPS, "connections_per_path": 2})["connections_per_path"] == 2
+
+
+@pytest.mark.parametrize("key,value", [("stripe_threshold_bytes", True), ("stripe_threshold_bytes", -1),
+                                     ("stripe_threshold_bytes", 1 << 20), ("stripe_threshold_bytes", 1 << 51),
+                                     ("stripe_streams", True), ("stripe_streams", 1), ("stripe_streams", 9)])
+def test_stripe_bounds(key, value):
+    with pytest.raises(ValueError, match=key):
+        validate({key: value})
+
+
+def test_stripe_overrides_and_disable():
+    assert validate({"stripe_threshold_bytes": 0})["stripe_threshold_bytes"] == 0
+    settings = {"stripe_threshold_bytes": 256 << 20, "stripe_streams": 8}
+    assert all(validate(settings)[k] == v for k, v in settings.items())
+
+
+@pytest.mark.parametrize("value", [0, True, "16777216", 512 << 10, 3 << 20, 128 << 20])
+def test_stripe_piece_bounds(value):
+    with pytest.raises(ValueError, match="stripe_piece_bytes"):
+        validate({"stripe_piece_bytes": value})
+
+
+@pytest.mark.parametrize("mib", [1, 8, 16, 32, 64])
+def test_stripe_piece_sizes(mib):
+    assert validate({"stripe_piece_bytes": mib << 20})["stripe_piece_bytes"] == mib << 20
+
+
+@pytest.mark.parametrize("value", [True, -1, "16777216", 3 << 20, 128 << 20])
+def test_http2_window_bounds(value):
+    with pytest.raises(ValueError, match="http2_stream_window_bytes"):
+        validate({"http2_stream_window_bytes": value})
+
+
+@pytest.mark.parametrize("value", [0, 4 << 20, 16 << 20, 32 << 20, 64 << 20])
+def test_http2_window_sizes(value):
+    assert validate({"http2_stream_window_bytes": value})["http2_stream_window_bytes"] == value

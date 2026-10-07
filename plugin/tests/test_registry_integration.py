@@ -107,6 +107,82 @@ class RegistryFixture:
         self.thread.join(timeout=5)
 
 
+@pytest.mark.parametrize("bundled_decoder", [False, True])
+def test_striped_registry_import_downloads_once_and_preserves_reuse(tmp_path, monkeypatch, caplog, bundled_decoder):
+    from types import SimpleNamespace
+
+    from sparkrun.plugins import ImagePullRequest
+    from sparkrun.transports.session import SshHostSession
+    from sparkrun_oci_relay.host import Runner
+    from sparkrun_oci_relay.provider import RelayProvider
+
+    fixture = RegistryFixture(size=12 << 20)
+    config_file = tmp_path / 'docker-config.json'
+    config_file.write_text(json.dumps({'auths': {fixture.host: {'auth': base64.b64encode(b'fixture:password').decode()}}}))
+    settings = {'development_binary': os.environ['OCI_RELAY_BINARY'], 'remote_cache_dir': str(tmp_path / 'binaries'),
+                'transport': 'http2-direct', 'registry_plain_http': True, 'registry_config': str(config_file),
+                'registry_cache_bytes': 0, 'max_buffer_bytes': 8 << 20,
+                'stripe_threshold_bytes': 8 << 20, 'stripe_streams': 4}
+    if bundled_decoder:
+        helper = os.environ.get('OCI_RELAY_UNPIGZ')
+        if not helper:
+            pytest.skip('requires native OCI_RELAY_UNPIGZ')
+        settings.update(development_unpigz=helper, receiver_decoder='unpigz', max_decode_bytes=64 << 20)
+    original = Runner.start_receiver
+
+    def local_connections(self, host, binary, directory, arguments, inventory):
+        # Route qualification has separate tests. Exercise four real TLS/HTTP2
+        # connections on loopback, without depending on CI's physical NICs.
+        arguments = list(arguments)
+        index = arguments.index('--endpoint')
+        endpoint = arguments[index + 1]
+        arguments[index:index + 2] = ['--path', endpoint + ',127.0.0.1', '--connections-per-path', '4']
+        return original(self, host, binary, directory, arguments, inventory)
+
+    monkeypatch.setattr(Runner, 'start_receiver', local_connections)
+    session = SshHostSession()
+    old_ids = []
+    try:
+        for count in (1, 2, 2):
+            previous = fixture.config_id
+            fixture.update(count)
+            if previous != fixture.config_id:
+                old_ids.append(previous)
+            fixture.downloads.clear()
+            caplog.clear()
+            request = ImagePullRequest(image=fixture.image, source_host=None, targets=('localhost',),
+                transfer_hosts=('127.0.0.1',), timeout=90, force_pull=True, session=session,
+                config=SimpleNamespace(plugin_settings=lambda _: settings))
+            with caplog.at_level('INFO', logger='sparkrun_oci_relay.provider'):
+                outcome = RelayProvider().pull(request)
+            assert not outcome.errors and outcome.outcomes['localhost'] in {'complete', 'already_present'}
+            observed = json.loads(subprocess.check_output(['docker', 'image', 'inspect', fixture.image]))[0]
+            assert observed['Id'] == fixture.config_id
+            assert observed['RootFS']['Layers'] == fixture.diff_ids[:count]
+            downloads = [d for d in fixture.downloads if d in {v['digest'] for v in fixture.descriptors}]
+            if count == 1 or previous != fixture.config_id:
+                assert downloads == [fixture.descriptors[count - 1]['digest']], 'striping repeated upstream layer download'
+                registry = next(record.args for record in caplog.records if record.msg == 'OCI Relay registry: %s')
+                assert registry['shared_sha256_verifications'] == 1
+                assert registry['local_sha256_verifications'] == 0
+                timings = next(record.args for record in caplog.records if record.msg == 'OCI Relay receiver timings: %s')
+                assert len(timings['localhost']['paths']) == 4
+                assert all(p['stripe_requests'] == 1 and p['bytes'] > 0 for p in timings['localhost']['paths'])
+                assert timings['localhost']['reused_layers'] == count - 1
+                if bundled_decoder:
+                    assert timings['localhost']['decoder']['layers'] == 1
+                    assert timings['localhost']['decoder']['bytes'] >= 12 << 20
+                    assert not timings['localhost']['decoder'].get('fallback')
+            else:
+                assert downloads == [], 'warm target downloaded layers'
+    finally:
+        session.close()
+        fixture.close()
+        subprocess.run(['docker', 'image', 'rm', fixture.image], capture_output=True)
+        for image_id in old_ids:
+            subprocess.run(['docker', 'image', 'rm', image_id], capture_output=True)
+
+
 @pytest.mark.parametrize('transport', ['http2-direct', 'http2-ssh', 'ssh-stdio'])
 def test_registry_progress_visible_during_transfer(tmp_path, transport, caplog, monkeypatch):
     from types import SimpleNamespace

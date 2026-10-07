@@ -102,10 +102,14 @@ func (e *Engine) Load(ctx context.Context, input io.Reader) error {
 }
 
 type Progress struct {
-	ID          string
-	Status      string
-	Error       string
-	ErrorDetail struct{ Message string }
+	ID             string
+	Status         string
+	Error          string
+	ErrorDetail    struct{ Message string }
+	ProgressDetail struct {
+		Current int64
+		Total   int64
+	}
 }
 
 func progress(ctx context.Context, r io.ReadCloser, observe ...func(Progress)) error {

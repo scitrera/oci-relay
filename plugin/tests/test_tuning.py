@@ -10,7 +10,7 @@ def test_cx7_hints_increase_budgets_but_ssh_does_not():
     assert limits({}, facts, "http2-direct") == {"max_buffer_bytes": 1024 * MIB, "source_streams": 32}
     assert limits({}, facts, "ssh-stdio") == {"max_buffer_bytes": 128 * MIB, "source_streams": 4}
     facts["network_gbps"] = 100
-    assert limits({}, facts, "http2-direct")["max_buffer_bytes"] == 512 * MIB
+    assert limits({}, facts, "http2-direct")["max_buffer_bytes"] == 1024 * MIB
 
 
 def test_auto_limits_respect_memory_cpu_and_unknown_hosts():
@@ -44,7 +44,13 @@ def test_spark_probe_uses_effective_single_port_bandwidth():
     assert facts["network_gbps"] == 100
     assert facts["source_address"] == "192.168.12.11"
     facts.update(available_memory=128 << 30, cpus=20)
+    assert limits({}, facts, "http2-direct") == {"max_buffer_bytes": 1024 * MIB, "source_streams": 16}
+
+
+def test_spark_larger_buffer_still_shares_available_memory_between_roles():
+    facts = {"network_gbps": 100, "available_memory": 8 << 30, "cpus": 20}
     assert limits({}, facts, "http2-direct") == {"max_buffer_bytes": 512 * MIB, "source_streams": 16}
+    assert limits({}, facts, "http2-direct", local_roles=2) == {"max_buffer_bytes": 256 * MIB, "source_streams": 16}
 
 
 def test_batched_probe_keeps_ancestor_memory_caps_when_route_is_unknown():

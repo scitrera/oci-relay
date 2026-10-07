@@ -7,6 +7,7 @@ package peer
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math"
@@ -16,6 +17,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/image"
 	"github.com/scitrera/oci-relay/internal/transfer"
 )
@@ -38,15 +40,36 @@ type ReceiverProgress struct {
 	ReusedLayers   int     `json:"reused_layers"`
 	ActiveStreams  int     `json:"active_streams"`
 	BytesPerSecond float64 `json:"bytes_per_second"`
+	// Docker's extraction counters describe its input stream, not filesystem
+	// bytes or a time estimate. Keep one active layer so each report stays bounded.
+	ExtractingLayer  string  `json:"extracting_layer,omitempty"`
+	ExtractCurrent   int64   `json:"extract_current,omitempty"`
+	ExtractTotal     int64   `json:"extract_total,omitempty"`
+	ExtractSeconds   float64 `json:"extract_seconds,omitempty"`
+	ExtractUpdateAge float64 `json:"extract_update_age_seconds,omitempty"`
+	ExtractedLayers  int     `json:"extracted_layers,omitempty"`
+}
+
+func validLayerID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
 }
 
 func validProgress(p ReceiverProgress) bool {
 	switch p.Phase {
-	case "checking", "discovering", "transferring", "importing", "verifying", "cleanup":
+	case "checking", "discovering", "decoding", "transferring", "importing", "verifying", "cleanup":
 	default:
 		return false
 	}
-	return p.Sequence > 0 && p.ExpectedBytes >= 0 && p.ExpectedBytes <= 1<<60 &&
+	return (p.ExtractingLayer == "" || validLayerID(p.ExtractingLayer)) &&
+		p.ExtractCurrent >= 0 && p.ExtractCurrent <= 1<<60 && p.ExtractTotal >= 0 && p.ExtractTotal <= 1<<60 &&
+		p.ExtractedLayers >= 0 && p.ExtractedLayers <= 4095 &&
+		p.ExtractSeconds >= 0 && !math.IsNaN(p.ExtractSeconds) && !math.IsInf(p.ExtractSeconds, 0) &&
+		p.ExtractUpdateAge >= 0 && !math.IsNaN(p.ExtractUpdateAge) && !math.IsInf(p.ExtractUpdateAge, 0) &&
+		p.Sequence > 0 && p.ExpectedBytes >= 0 && p.ExpectedBytes <= 1<<60 &&
 		p.ReceivedBytes >= 0 && p.ReceivedBytes <= 1<<60 && p.WireBytes >= p.ReceivedBytes &&
 		p.ReusedLayers >= 0 && p.ReusedLayers <= 4095 && p.ActiveStreams >= 0 && p.ActiveStreams <= 256 &&
 		p.Elapsed >= 0 && !math.IsNaN(p.Elapsed) && !math.IsInf(p.Elapsed, 0) &&
@@ -109,8 +132,55 @@ type receiverProgress struct {
 	lastWire         int64
 	offsets          map[digest.Digest]int64
 	sizes            map[digest.Digest]int64
+	extracts         map[string]*layerExtraction
 	cancel           context.CancelFunc
 	done             chan struct{}
+}
+
+type layerExtraction struct {
+	started, updated time.Time
+	current, total   int64
+	done             bool
+}
+
+// Status is advisory and bounded independently of the Docker JSON stream.
+func (p *receiverProgress) docker(event engine.Progress) {
+	if !validLayerID(event.ID) || (event.Status != "Extracting" && event.Status != "Pull complete") {
+		return
+	}
+	current, total := event.ProgressDetail.Current, event.ProgressDetail.Total
+	if current < 0 || total < 0 || current > 1<<60 || total > 1<<60 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.extracts == nil {
+		p.extracts = map[string]*layerExtraction{}
+	}
+	layer := p.extracts[event.ID]
+	now := time.Now()
+	if layer == nil {
+		if len(p.extracts) >= image.MaxDescriptors-1 {
+			return
+		}
+		layer = &layerExtraction{started: now, updated: now}
+		p.extracts[event.ID] = layer
+	}
+	if event.Status == "Pull complete" {
+		if !layer.done {
+			p.value.ExtractedLayers++
+			layer.done = true
+		}
+		return
+	}
+	if layer.done { // A retried pull may emit a layer again; do not double count.
+		return
+	}
+	p.value.Phase = "importing"
+	if layer.current != current || layer.total != total {
+		layer.updated = now
+	}
+	layer.current, layer.total = current, total
 }
 
 func newReceiverProgress(ctx context.Context, c *Client) *receiverProgress {
@@ -170,6 +240,21 @@ func (p *receiverProgress) snapshot() ReceiverProgress {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
+	p.value.ExtractingLayer = ""
+	p.value.ExtractCurrent, p.value.ExtractTotal = 0, 0
+	p.value.ExtractSeconds, p.value.ExtractUpdateAge = 0, 0
+	var oldest *layerExtraction
+	for id, layer := range p.extracts {
+		if !layer.done && (oldest == nil || layer.started.Before(oldest.started)) {
+			oldest = layer
+			p.value.ExtractingLayer = id
+		}
+	}
+	if oldest != nil {
+		p.value.ExtractCurrent, p.value.ExtractTotal = oldest.current, oldest.total
+		p.value.ExtractSeconds = now.Sub(oldest.started).Seconds()
+		p.value.ExtractUpdateAge = now.Sub(oldest.updated).Seconds()
+	}
 	p.value.Sequence++
 	p.value.Elapsed = now.Sub(p.started).Seconds()
 	if dt := now.Sub(p.sampled).Seconds(); dt > 0 {

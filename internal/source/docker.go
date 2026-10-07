@@ -27,6 +27,7 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
 )
 
@@ -613,10 +614,9 @@ func (s *Docker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if s.ctx.Err() != nil {
 			err = s.ctx.Err()
 		} else {
-			_, err = u.f.Seek(0, io.SeekStart)
-			if err == nil {
-				_, err = io.CopyBuffer(req.out, u.f, make([]byte, 64<<10))
-			}
+			reader := fileio.NewReader(u.f, 0, u.size+1)
+			_, err = io.CopyBuffer(req.out, reader, make([]byte, 64<<10))
+			_ = reader.Close()
 		}
 		req.writeMu.Unlock()
 		s.mu.Lock()

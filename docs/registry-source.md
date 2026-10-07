@@ -27,6 +27,13 @@ resolution to eight nesting levels, and descriptor counts remain bounded.
 Compressed blob hashes remain distinct from config diffIDs. Final stream
 completion is withheld until verification succeeds.
 
+The source cache and registry downloader share one SHA-256 pass over each blob.
+A verification barrier drains the bounded source pipeline before a retained
+disk blob becomes available. Receiver SHA checks remain independent. Standalone
+registry fetches, including the uncompressed exporter, still calculate their
+own hash; retained-file replays are verified too. Compressed descriptor hashes
+and uncompressed DiffIDs continue to verify different byte representations.
+
 ## Sparkrun selection
 
 Core's additive `try_image_pull()` hook runs before the controller/head source
@@ -82,9 +89,8 @@ plugins:
   oci-relay:
     source_mode: auto
     registry_source: true       # Default: automatic pre-pull registry selection.
-    registry_cache_bytes: 0     # Default: no payload disk cache.
-    # Optional retained compressed blobs, e.g. 8 GiB:
-    # registry_cache_bytes: 8589934592
+    registry_cache_bytes: 17179869184  # Default: up to 16 GiB on the fetcher.
+    # registry_cache_bytes: 0          # Disable payload retention.
     # registry_config: /absolute/path/to/docker/config.json  # On the fetcher.
     # registry_plain_http: true  # Explicitly trusted HTTP registries only.
 ```
@@ -100,18 +106,32 @@ The memory ring shares overlapping readers but evicts old prefixes. A late
 receiver can require another acquisition; `ConcurrentReplay` remains disabled
 for registry sources, but that alone cannot eliminate later refetches.
 
-An optional `registry_cache_bytes` budget retains compressed blobs for the
-operation. The first requester streams while the same bytes are written using
-ordinary buffered file I/O. A retained blob becomes readable by later
+The plugin defaults `registry_cache_bytes` to **16 GiB** on the fetcher. It
+checks space available to the management user on the spool filesystem and
+reduces the budget to leave **16 GiB** free. If the probe fails or there is too
+little headroom, retention is disabled. Explicit budgets are also capped by
+this check; zero opts out. This is a startup check, not a disk reservation
+against other processes. The standalone CLI continues to default to zero.
+
+The budget retains compressed blobs only for the operation. The first requester
+streams while the same bytes are written using ordinary buffered file I/O. A retained blob becomes readable by later
 acquisitions only after exact size and digest verification. Files are private
 and removed on cleanup. This adds no full-image preparation barrier.
+Replays prefer direct reads on Linux, with buffered fallback where unsupported;
+see [bulk reads and source pipelining](source-selection.md#bulk-reads-and-source-pipelining)
+for memory accounting and integrity checks.
 
 Reservations cover whole blobs before writing and never exceed the byte budget.
 Completed blobs remain until operation cleanup. A blob that does not fit the
 remaining budget streams without retention, increments `disk_cache_bypasses`,
 and may be downloaded again. This is a bounded first-fit cache, not an LRU or
-persistent cache. A filesystem write failure fails the acquisition and removes
-its incomplete file; it does not silently continue as a successful cache fill.
+persistent cache. In the updated engine, a filesystem write failure removes
+the incomplete file, disables further cache writes, and continues verified
+upstream streaming.
+Waiting readers may refetch; this is reported as `disk_cache_write_errors`,
+not a successful cache fill. Upstream corruption and receiver write errors
+still fail the acquisition. The released v0.1.0 engine treats disk-write
+failures as acquisition failures; the graceful fallback needs a new binary.
 
 The disk budget is separate from `max_buffer_bytes` and Docker push staging's
 `max_spool_bytes`. OS page cache, TLS and runtime memory remain outside the
@@ -120,10 +140,13 @@ when avoiding refetch is important; there is no unconditional single-download
 guarantee under failures or an insufficient cache budget.
 
 Source events and plugin logs expose `registry_metrics`: upstream blob bytes,
-blob download count, retained-cache hits/bypasses, current/peak reserved disk
+blob download count, retained-cache hits/bypasses/write errors, current/peak reserved disk
 bytes, and metadata bytes. These are application byte counts, excluding HTTP/TLS
 overhead. Source cache acquisition bytes can exceed upstream bytes when a
 retained file satisfies a later receiver.
+`shared_sha256_verifications` and `local_sha256_verifications` count successful
+blob checks performed by the transfer cache or by a standalone registry fetch,
+respectively. They exclude manifest/config checks and failed blob checks.
 
 ## Credentials and protocol behavior
 
@@ -229,7 +252,7 @@ already verified, and advises retrying after restoring cache storage. On retry,
 the registry pin is re-verified and an intact installed image can be reused
 without downloading its layers again.
 
-The engine remains compatible with the v0.1.0 binaries. The plugin requires
+The digest-pin handoff remains compatible with v0.1.0 binaries. The plugin requires
 Sparkrun's image-runtime API 1 for this handoff and reports an explicit
 compatibility error on older hosts instead of silently dropping the digest.
 
@@ -242,7 +265,8 @@ fresh pull-then-save/load; a 313 MB missing-layer update took 11–15 seconds
 versus 159 seconds for save/load from an already-populated source. Each needed
 blob was fetched once for both receivers, including the diskless trials.
 Direct pulls had comparable latency in these single trials. Disk retention had
-no hits, so these results do not justify changing its zero-byte default.
+no hits in those closely synchronized runs. Later four-receiver runs showed
+late-reader refetches, motivating the bounded plugin retention default above.
 A matched pull-then-native-relay comparison remains unmeasured.
 
 ## Mixed Docker stores
@@ -257,3 +281,47 @@ Only missing layers need upstream acquisition. Config bytes remain identical;
 the receiver reports both canonical and installed manifest digests. See
 [storage compatibility](storage-compatibility.md) for qualification, identity
 checks, opt-outs, and signature/referrer limitations.
+
+## Docker extraction visibility
+
+Updated relay binaries include the oldest active extraction layer ID, Docker's
+current/total input counters, time extracting that layer, time since its last
+counter advance, and the number of layers reporting `Pull complete`. The plugin
+includes these in the existing 30-second updates. These are advisory observations,
+not an ETA or proof of success. A layer at 100% can still be registering files
+and metadata. Cached layers and daemons that omit extraction events do not
+produce invented counts. Final image/config verification remains authoritative.
+Older binaries still work, but cannot supply these new fields.
+
+## Source decompression experiment
+
+`scripts/registry-uncompress` is an explicit Go experiment, not a plugin source
+mode or default. It resolves the exact registry pin, downloads and decompresses
+gzip layers with bounded concurrency, verifies both each upstream compressed
+SHA-256 and the config's uncompressed DiffID, and writes a private OCI layout.
+Config bytes and layer order stay identical; the rewritten manifest has a new
+digest. It currently supports gzip and already-uncompressed layers; zstd is
+rejected. It neither fabricates upstream RepoDigests nor publishes pin receipts.
+
+Build and measure with `scripts/benchmark-registry-import.py` against separately
+provisioned empty Docker stores. The harness checks source disk headroom and
+requires a hard export budget, an exact registry pin, and explicitly isolated
+receiver sockets. For example:
+
+```sh
+CGO_ENABLED=0 go build -o /tmp/registry-uncompress ./scripts/registry-uncompress
+python scripts/benchmark-registry-import.py uncompressed \
+  --image 'REGISTRY/IMAGE@sha256:DIGEST' --host RECEIVER \
+  --receiver-docker-host unix:///tmp/oci-relay-benchmark.NAME/docker.sock \
+  --data-paths /private/paths.json --binary /absolute/path/oci-relay \
+  --decompressor /tmp/registry-uncompress --max-bytes 68719476736 \
+  --workers 8 --max-buffer-bytes 1073741824 \
+  --output /private/uncompressed-result.json
+```
+
+Compare with `compressed` using a freshly reset owned test store. Timing includes
+download/decompression preparation, relay setup, Docker import, and staging
+cleanup. This prototype stages the **whole image** before receivers begin: it
+does not exploit their existing layers during preparation and sends more LAN
+bytes. A faster extraction phase alone is not evidence of a faster operation.
+Do not enable this automatically without a measured end-to-end benefit.

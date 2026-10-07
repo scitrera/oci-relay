@@ -37,3 +37,9 @@ The Go compiler/runtime and standard library use the Go Authors' BSD-style
 license. Their license text is included in THIRD_PARTY_LICENSES.txt. The
 shared CI generator is scitrera/repo-tools at the revision in versions.yaml,
 under its own BSD-3-Clause license; it is not linked into the executable.
+
+Release archives also redistribute a separate native pigz/unpigz helper built
+from pinned pigz, zlib and (Linux only) musl sources. Source URLs and SHA-256
+pins are in scripts/native-dependencies.json. The NOZOPFLI build excludes the
+compression-only zopfli dependency. Their license and notice texts are included
+in each archive's UNPIGZ_LICENSES.txt. The helper is separate from the Go binary.

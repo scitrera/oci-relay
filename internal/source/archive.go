@@ -20,6 +20,7 @@ import (
 	"github.com/moby/moby/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
 )
 
@@ -228,7 +229,8 @@ func (a *Archive) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error
 	}
 	name, _ := image.BlobPath("", d.Digest)
 	s := a.entries[name]
-	r := io.NewSectionReader(a.file, s.offset, s.size)
+	r := fileio.NewReader(a.file, s.offset, s.size)
+	defer r.Close()
 	buf := make([]byte, 256<<10)
 	for {
 		if err := ctx.Err(); err != nil {

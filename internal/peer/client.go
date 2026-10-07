@@ -19,15 +19,21 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Client struct {
-	Endpoint    string
-	Credentials Credentials
-	HTTP        *http.Client
-	transport   *http.Transport
-	paths       *pathPool
+	Endpoint         string
+	Credentials      Credentials
+	HTTP             *http.Client
+	transport        *http.Transport
+	paths            *pathPool
+	StripeThreshold  int64 // Zero disables striping; set before using the client.
+	StripeStreams    int
+	StripePieceBytes int64 // Zero uses the default; set before using the client.
+	striping         atomic.Bool
+	stripePieceMax   atomic.Int64
 }
 
 func NewClient(endpoint string, c Credentials, conn net.Conn) (*Client, error) {
@@ -61,7 +67,7 @@ func NewClient(endpoint string, c Credentials, conn net.Conn) (*Client, error) {
 			return tc, nil
 		}
 	}
-	return &Client{Endpoint: endpoint, Credentials: c, transport: t, HTTP: &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("relay redirects are forbidden") }}}, nil
+	return &Client{Endpoint: endpoint, Credentials: c, transport: t, StripeThreshold: 256 << 20, StripeStreams: 4, HTTP: &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("relay redirects are forbidden") }}}, nil
 }
 func (c *Client) Close() {
 	if c.paths != nil {
@@ -71,6 +77,29 @@ func (c *Client) Close() {
 		return
 	}
 	c.transport.CloseIdleConnections()
+}
+
+// ConfigureHTTP2Window sets an explicit per-stream receive credit before the
+// first request. Zero preserves Go's default. This is transport buffering in
+// addition to the managed payload cache, not an increase to that cache's budget.
+func (c *Client) ConfigureHTTP2Window(size int64) error {
+	if size == 0 {
+		return nil
+	}
+	if !validStripePiece(size) {
+		return errors.New("HTTP/2 receive window must be a power of two between 1 and 64 MiB")
+	}
+	if c.paths != nil {
+		for _, path := range c.paths.paths {
+			if err := path.client.ConfigureHTTP2Window(size); err != nil {
+				return err
+			}
+			path.metrics.HTTP2StreamWindowBytes = size
+		}
+		return nil
+	}
+	c.transport.HTTP2 = &http.HTTP2Config{MaxReceiveBufferPerStream: int(size)}
+	return nil
 }
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	if c.paths != nil {
@@ -112,10 +141,29 @@ func (c *Client) Image(ctx context.Context) (*image.Image, error) {
 	if err = im.Validate(); err != nil {
 		return nil, err
 	}
+	c.striping.Store(r.Header.Get(stripingHeader) == "1")
+	pieceMax, _ := strconv.ParseInt(r.Header.Get(stripePieceHeader), 10, 64)
+	if !validStripePiece(pieceMax) {
+		pieceMax = stripePiece
+	}
+	c.stripePieceMax.Store(pieceMax)
 	return &im, nil
 }
 func (c *Client) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error {
 	if c.paths != nil {
+		if c.striping.Load() && c.StripeThreshold > 0 && d.Size >= c.StripeThreshold && c.StripeStreams >= 2 {
+			piece := c.StripePieceBytes
+			if piece == 0 {
+				piece = stripePiece
+			}
+			if !validStripePiece(piece) {
+				return errors.New("invalid stripe piece size")
+			}
+			piece = min(piece, max(stripePiece, c.stripePieceMax.Load()))
+			if paths := c.paths.reserveStripes(d.Size, min(c.StripeStreams, int(d.Size/piece)), piece); len(paths) >= 2 {
+				return c.fetchStripes(ctx, d, w, paths, piece)
+			}
+		}
 		return c.fetchPath(ctx, d, w)
 	}
 	return c.fetch(ctx, d, w)

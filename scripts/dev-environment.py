@@ -46,6 +46,8 @@ def configure(destination: Path, base: Path, binary: Path) -> Path:
                         'allow_preparation_read': True, 'transport': 'auto'}.items():
         settings.setdefault(name, value)
     settings['development_binary'] = str(binary.resolve())
+    if binary.with_name('unpigz').is_file():
+        settings['development_unpigz'] = str(binary.with_name('unpigz').resolve())
     if first:
         # Snapshot distribution/recipe config, not auth tokens or service state.
         # Copies prevent development commands from mutating the user's originals.

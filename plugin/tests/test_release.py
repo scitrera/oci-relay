@@ -78,3 +78,56 @@ def test_cached_release_is_verified_and_reextracted(tmp_path, monkeypatch, symli
         binary, sha = release.acquire("arm64", settings, offline=True)
         assert binary.read_bytes() == executable.read_bytes()
         assert sha == release.file_digest(executable)
+
+
+@pytest.mark.parametrize('problem', ['', 'hash', 'platform', 'symlink', 'duplicate'])
+def test_decoder_bundle_is_bound_to_archive_and_binary(tmp_path, monkeypatch, problem):
+    package = tmp_path / 'package'
+    package.mkdir()
+    monkeypatch.setattr(release, '__file__', str(package / 'release.py'))
+    cache = tmp_path / 'cache' / release.__version__ / 'linux-arm64'
+    cache.mkdir(parents=True)
+    binary = cache / 'oci-relay'
+    sha = elf(binary)
+    data = binary.read_bytes()
+    manifest = {'format': 1, 'version': release.__version__, 'platform': 'linux/arm64',
+                'capabilities': ['receiver-unpigz-v1'],
+                'files': {name: {'sha256': sha, 'size': len(data)} for name in ('oci-relay', 'unpigz')}}
+    if problem == 'hash':
+        manifest['files']['unpigz']['sha256'] = '0' * 64
+    if problem == 'platform':
+        manifest['platform'] = 'linux/amd64'
+    with tarfile.open(cache / 'release.tar.gz', 'w:gz') as tar:
+        files = [('oci-relay', data), ('unpigz', data), ('bundle.json', json.dumps(manifest).encode()),
+                 ('UNPIGZ_LICENSES.txt', b'licenses')]
+        if problem == 'duplicate':
+            files.append(('unpigz', data))
+        for name, content in files:
+            entry = tarfile.TarInfo(name)
+            entry.size = len(content)
+            if name == 'unpigz' and problem == 'symlink':
+                entry.type, entry.linkname, entry.size = tarfile.SYMTYPE, 'oci-relay', 0
+            tar.addfile(entry, io.BytesIO(content) if entry.isfile() else None)
+    (package / 'releases.json').write_text(json.dumps({release.__version__: {'linux/arm64': {
+        'url': 'https://example.invalid/release.tar.gz', 'sha256': release.file_digest(cache / 'release.tar.gz')}}}))
+    if problem:
+        with pytest.raises(release.BinaryUnavailable):
+            release.acquire_decoder('arm64', {}, binary)
+    else:
+        for _ in range(2):
+            helper, observed = release.acquire_decoder('arm64', {}, binary)
+            assert observed == sha and helper.read_bytes() == data
+            helper.chmod(0o600)
+            helper.write_bytes(b'tampered')
+        assert (cache / 'UNPIGZ_LICENSES.txt').read_bytes() == b'licenses'
+
+
+def test_development_decoder_requires_explicit_opt_in(tmp_path):
+    binary = tmp_path / 'oci-relay'
+    elf(binary)
+    helper = tmp_path / 'unpigz'
+    sha = elf(helper)
+    settings = {'development_binary': str(binary)}
+    assert release.acquire_decoder('arm64', settings, binary) is None
+    settings['development_unpigz'] = str(helper)
+    assert release.acquire_decoder('arm64', settings, binary) == (helper, sha)

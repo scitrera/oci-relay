@@ -9,6 +9,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,6 +24,37 @@ import (
 	"github.com/vbatts/tar-split/tar/asm"
 	"github.com/vbatts/tar-split/tar/storage"
 )
+
+func TestNativePayloadReadPolicyAndBytes(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	g := nativeGetter{root: root, ctx: context.Background()}
+	for _, size := range []int{nativeDirectReadMin - 1, nativeDirectReadMin, nativeDirectReadMin + 17} {
+		data := bytes.Repeat([]byte("x"), size)
+		name := fmt.Sprint(size)
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		r, err := g.Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, buffered := r.(*os.File)
+		if buffered != (size < nativeDirectReadMin) {
+			r.Close()
+			t.Fatalf("unexpected reader for %d bytes", size)
+		}
+		got, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("payload changed at cutoff: %v", err)
+		}
+	}
+}
 
 func nativeFixture(t *testing.T) (root, id, payloadPath, metadataPath string, raw []byte) {
 	t.Helper()
@@ -203,7 +235,7 @@ func TestNativeRejectsCorruptionAndEscape(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer n.Close()
-			c, err := transfer.New(ctx, n, 1<<20, 1)
+			c, err := transfer.NewSource(ctx, n, 1<<20, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

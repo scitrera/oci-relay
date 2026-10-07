@@ -34,3 +34,12 @@ func TestProgressObservation(t *testing.T) {
 		t.Fatalf("observation: %v %v", seen, err)
 	}
 }
+
+func TestDockerExtractionCounters(t *testing.T) {
+	input := `{"id":"abcdef123456","status":"Extracting","progressDetail":{"current":1073741824,"total":2147483648}}`
+	var got Progress
+	err := progress(context.Background(), io.NopCloser(strings.NewReader(input)), func(p Progress) { got = p })
+	if err != nil || got.ProgressDetail.Current != 1<<30 || got.ProgressDetail.Total != 2<<30 {
+		t.Fatalf("lost extraction detail: %+v %v", got, err)
+	}
+}
