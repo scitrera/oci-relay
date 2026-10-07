@@ -49,6 +49,9 @@ ci:
         setup_steps:
           - name: Check native build prerequisites
             run: python3 --version && cc --version && make --version
+          - name: Configure macOS loopback for multi-link tests
+            if: runner.os == 'macOS'
+            run: sudo ifconfig lo0 alias 127.0.0.2
           - name: Test Go on the native target
             run: go test -race -count=1 ./...
         package_command: python3 scripts/build-decoder.py

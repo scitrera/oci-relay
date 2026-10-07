@@ -131,7 +131,11 @@ func TestInventoryDeadlineAndErrorsAreDistinct(t *testing.T) {
 			if mode == "cancel" {
 				cancel()
 			}
-			inv, err := e.Discover(ctx, request, 20*time.Millisecond, false)
+			budget := 5 * time.Second
+			if mode == "deadline" {
+				budget = 20 * time.Millisecond
+			}
+			inv, err := e.Discover(ctx, request, budget, false)
 			switch mode {
 			case "deadline":
 				if err != nil || inv.Complete || inv.StopReason != "time_budget" {

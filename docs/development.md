@@ -15,6 +15,8 @@ The generated release builds are static Linux amd64 and arm64 executables.
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
+# macOS multi-link tests need a second loopback address (CI configures it):
+# sudo ifconfig lo0 alias 127.0.0.2
 go test -race ./...
 go vet ./...
 # Opt-in: builds/removes disposable images on the local Docker daemon.

@@ -67,6 +67,12 @@ jobs:
           python3 --version && cc --version && make --version
         working-directory: .
 
+      - name: Configure macOS loopback for multi-link tests
+        if: runner.os == 'macOS'
+        run: |
+          sudo ifconfig lo0 alias 127.0.0.2
+        working-directory: .
+
       - name: Test Go on the native target
         run: |
           go test -race -count=1 ./...
