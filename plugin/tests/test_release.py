@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
 import hashlib
+import http.client
 import io
 import json
+import ssl
 import tarfile
+import urllib.error
 
 import pytest
 
@@ -23,15 +26,15 @@ def test_explicit_binary_requires_trusted_hash_and_architecture(tmp_path):
     path = tmp_path / "binary"
     sha = elf(path)
     config = {"binary_paths": {"arm64": str(path)}}
-    with pytest.raises(release.BinaryUnavailable, match="trusted"):
+    with pytest.raises(release.BinaryInvalid, match="trusted"):
         release.acquire("arm64", config, offline=True)
     config["binary_sha256"] = {"arm64": sha}
     assert release.acquire("arm64", config, offline=True) == (path, sha)
     path.write_bytes(b"tampered")
-    with pytest.raises(release.BinaryUnavailable, match="checksum"):
+    with pytest.raises(release.BinaryInvalid, match="checksum"):
         release.acquire("arm64", config, offline=True)
     elf(path, machine=62)
-    with pytest.raises(release.BinaryUnavailable, match="arm64"):
+    with pytest.raises(release.BinaryInvalid, match="arm64"):
         release.verify_elf(path, "arm64")
 
 
@@ -72,7 +75,7 @@ def test_cached_release_is_verified_and_reextracted(tmp_path, monkeypatch, symli
     (cache / "oci-relay").write_bytes(b"tampered cached executable")
     settings = {"cache_dir": str(tmp_path / "cache")}
     if symlink:
-        with pytest.raises(release.BinaryUnavailable, match="regular"):
+        with pytest.raises(release.BinaryInvalid, match="regular"):
             release.acquire("arm64", settings, offline=True)
     else:
         binary, sha = release.acquire("arm64", settings, offline=True)
@@ -111,7 +114,7 @@ def test_decoder_bundle_is_bound_to_archive_and_binary(tmp_path, monkeypatch, pr
     (package / 'releases.json').write_text(json.dumps({release.__version__: {'linux/arm64': {
         'url': 'https://example.invalid/release.tar.gz', 'sha256': release.file_digest(cache / 'release.tar.gz')}}}))
     if problem:
-        with pytest.raises(release.BinaryUnavailable):
+        with pytest.raises(release.BinaryInvalid):
             release.acquire_decoder('arm64', {}, binary)
     else:
         for _ in range(2):
@@ -131,3 +134,105 @@ def test_development_decoder_requires_explicit_opt_in(tmp_path):
     assert release.acquire_decoder('arm64', settings, binary) is None
     settings['development_unpigz'] = str(helper)
     assert release.acquire_decoder('arm64', settings, binary) == (helper, sha)
+
+
+@pytest.fixture
+def download_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, '__file__', str(tmp_path / 'release.py'))
+    (tmp_path / 'releases.json').write_text(json.dumps({release.__version__: {'linux/arm64': {
+        'url': 'https://example.invalid/release.tar.gz', 'sha256': 'a' * 64,
+    }}}))
+    return {'cache_dir': str(tmp_path / 'cache')}
+
+
+@pytest.mark.parametrize('during_read', [False, True])
+@pytest.mark.parametrize('error', [
+    urllib.error.URLError('DNS lookup failed'), TimeoutError('timed out'),
+    ConnectionResetError('connection reset'),
+    urllib.error.HTTPError('https://example.invalid/release.tar.gz', 503, 'unavailable', {}, None),
+    http.client.IncompleteRead(b'partial archive', 100),
+])
+def test_network_failures_are_unavailable_and_clean_partial_downloads(
+    download_settings, tmp_path, monkeypatch, during_read, error,
+):
+    class Response(io.BytesIO):
+        url = 'https://example.invalid/release.tar.gz'
+
+        def read(self, size):
+            chunk = super().read(size)
+            if chunk:
+                return chunk
+            raise error
+
+    response = Response(b'partial archive')
+
+    def download(*a, **kw):
+        if not during_read:
+            raise error
+        return response
+
+    monkeypatch.setattr(release.urllib.request, 'urlopen', download)
+    with pytest.raises(release.BinaryUnavailable, match='download unavailable'):
+        release.acquire('arm64', download_settings, offline=False)
+    assert not list((tmp_path / 'cache').rglob('release.tar.gz'))
+    assert not list((tmp_path / 'cache').rglob('.download-*'))
+    assert not list((tmp_path / 'cache').rglob('oci-relay'))
+    if during_read:
+        assert response.closed
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_certificate_failure_is_not_download_unavailability(download_settings, monkeypatch, wrapped):
+    error = ssl.SSLCertVerificationError('untrusted certificate')
+    if wrapped:
+        error = urllib.error.URLError(error)
+
+    def download(*a, **kw):
+        raise error
+
+    monkeypatch.setattr(release.urllib.request, 'urlopen', download)
+    with pytest.raises(release.BinaryInvalid, match='certificate'):
+        release.acquire('arm64', download_settings, offline=False)
+
+
+@pytest.mark.parametrize('problem', ['checksum', 'redirect', 'oversize', 'disk'])
+def test_invalid_downloads_and_local_io_errors_do_not_allow_fallback(
+    download_settings, tmp_path, monkeypatch, problem,
+):
+    response = io.BytesIO(b'untrusted archive')
+    response.url = 'http://example.invalid/archive' if problem == 'redirect' else 'https://example.invalid/archive'
+    monkeypatch.setattr(release.urllib.request, 'urlopen', lambda *a, **kw: response)
+    if problem == 'oversize':
+        monkeypatch.setattr(release, 'MAX_ARCHIVE', 1)
+    if problem == 'disk':
+        real_fdopen = release.os.fdopen
+
+        class FullDisk:
+            def __init__(self, fd, mode):
+                self.stream = real_fdopen(fd, mode)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.stream.close()
+
+            def write(self, chunk):
+                raise OSError('No space left on device')
+
+        monkeypatch.setattr(release.os, 'fdopen', FullDisk)
+    expected = OSError if problem == 'disk' else release.BinaryInvalid
+    with pytest.raises(expected):
+        release.acquire('arm64', download_settings, offline=False)
+    assert response.closed
+    assert not list((tmp_path / 'cache').rglob('.download-*'))
+
+
+@pytest.mark.parametrize('offline', [False, True])
+def test_corrupt_cached_archive_never_falls_back(download_settings, tmp_path, monkeypatch, offline):
+    cache = tmp_path / 'cache' / release.__version__ / 'linux-arm64'
+    cache.mkdir(parents=True)
+    (cache / 'release.tar.gz').write_bytes(b'corrupt')
+    monkeypatch.setattr(release.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('network used'))
+    with pytest.raises(release.BinaryInvalid, match='cached release archive checksum'):
+        release.acquire('arm64', download_settings, offline=offline)

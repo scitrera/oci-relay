@@ -42,7 +42,7 @@ features:
   plugins.oci_relay: false  # Avoid loading the bundled copy as well.
 integrations:
   oci-relay: true
-container_distribution_provider: oci-relay
+container_distribution_provider: auto
 plugins:
   oci-relay:
     source_mode: auto  # Default; choose a permitted source from detected facts.
@@ -72,6 +72,19 @@ architecture and hash, stages it to each execution host, verifies the remote
 hash, and checks the version/protocol before use. Hosts do not need internet
 access. Offline mode never downloads a binary. `releases.json` pins the published archives for each supported architecture.
 The adapter is pinned after the binary release, without moving the engine tag.
+
+With updated Sparkrun `develop-next`, automatic provider selection falls back to
+builtin Docker distribution if the relay release is unavailable (including
+network errors, timeouts, or offline mode without a cached release), or the
+provider cannot support the request before transfer. A warning explains the
+fallback. A verified controller cache works without internet; nodes receive
+binaries over SSH. Offline fallback still requires an available local image.
+
+Set `container_distribution_fallback: false` to disable fallback, or explicitly
+select `container_distribution_provider: oci-relay` to require the relay.
+`source dev.sh` keeps these strict settings for testing. Invalid configuration,
+checksum/certificate failures, and started transfers remain errors. Older hosts
+require `container_distribution_fallback: true` to enable fallback in `auto` mode.
 
 ## Transports
 
