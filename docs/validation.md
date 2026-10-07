@@ -609,3 +609,30 @@ Validation passed:
 Linux arm64 and amd64 development binaries were rebuilt. Disposable test image
 tags are removed by the fixtures; no model/application is launched and no Docker
 daemon configuration changes are needed.
+
+## Native bundles and receiver decoding — v0.1.1 (2026-10-07)
+
+The [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37567182305)
+passed Go race tests and native helper build/execution checks on Linux AMD64,
+Linux ARM64 and macOS ARM64. No QEMU was used. Linux helpers have no dynamic
+loader dependency; the macOS helper links only system libraries plus static
+zlib. SHA-256, bundle version/platform, source pins, executable formats and
+license files were independently checked after downloading the release.
+
+The local ARM64 plugin suite passed all 293 tests with real Docker integration
+enabled. Published archives were then tested through the normal pinned bundle
+installer, including offline acquisition for both Linux architectures. The
+published ARM64 binary/helper passed fresh, one-new-layer, and warm registry
+imports on `.13` and `.17` over both CX7 subnets with two connections per link.
+All four connections per receiver carried payload on the cold/update cases;
+each missing 32 MiB fixture layer was fetched once upstream, the update reused
+its base, and the warm case fetched/transferred no layers. Config digests and
+ordered DiffIDs matched. Fixture images and operation resources were removed;
+no model was launched and no Docker daemon configuration changed.
+
+Decoder tests also cover compressed-hash mismatch, wrong DiffID, damaged gzip,
+cancellation, unavailable helpers, bounded scratch fallback, and cleanup.
+The corresponding-source archive successfully rebuilt the relay and native
+ARM64 helper with dependency downloads disabled. These checks qualify the
+release behavior; small fixture timings are not throughput benchmarks, and
+native macOS builds do not establish Docker Desktop support.

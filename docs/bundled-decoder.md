@@ -4,8 +4,9 @@ OCI Relay release bundles include `oci-relay`, a native `unpigz` executable,
 `bundle.json`, and `UNPIGZ_LICENSES.txt`. No additional repository, package
 installation, Docker daemon configuration, or daemon restart is required.
 The decoder stays in the plugin's private cache; it is not installed into
-Docker's PATH. Python coordinates processes and copies executables; image
-payloads, verification, decoding and staging run in Go and the native helper.
+Docker's PATH. Verification, decoding and staging run in Go and the native
+helper. Direct HTTP/2 payloads bypass Python; the optional SSH stdio fallback
+forwards opaque streams through the Python orchestrator.
 
 ## Selection and limits
 

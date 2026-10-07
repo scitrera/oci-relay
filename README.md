@@ -17,13 +17,13 @@ resource limits, and reports progress.
 - Use multiple TCP data paths with bounded memory and concurrency.
 
 Native access supports qualified rootful Linux Docker 29+ stores. Real-engine
-qualification currently covers Linux arm64; Linux amd64 and macOS arm64 binaries
-are cross-built. See [platform support](docs/platforms.md), [storage compatibility](docs/storage-compatibility.md) and
+qualification currently covers Linux arm64. Linux amd64, Linux arm64 and macOS
+arm64 bundles are built and tested on native runners. See [platform support](docs/platforms.md), [storage compatibility](docs/storage-compatibility.md) and
 [validation](docs/validation.md). Published binaries are available from [GitHub releases](https://github.com/scitrera/oci-relay/releases).
 
 ## Quick start with Sparkrun
 
-Requires Bash, `uv`, Go 1.25+, Python 3.12+, and a Sparkrun `develop-next` / 0.4.0
+Requires Bash, `uv`, Go 1.25+, Python 3.12+, a C compiler, make, and a Sparkrun `develop-next` / 0.4.0
 checkout with image-distribution and pre-pull API 1. The default checkout path
 is `../oss-sparkrun`; set `SPARKRUN_CHECKOUT` to use another location.
 
@@ -33,7 +33,7 @@ sparkrun run YOUR_RECIPE
 deactivate
 ```
 
-The setup builds the relay, installs both projects editably, and enables the
+The setup builds the relay and native decoder, installs both projects editably, and enables the
 plugin in a private development configuration. It preserves normal user
 configuration and keeps the plugin outside Sparkrun's source tree. Image-transfer
 progress is visible by default. The bundled plugin defaults on for alpha and
@@ -53,6 +53,7 @@ CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
 - [Source modes and manifests](docs/source-modes.md) and
   [automatic selection](docs/source-selection.md).
 - [Registry sources](docs/registry-source.md): authentication, caching, and limits.
+- [Bundled receiver decoding](docs/bundled-decoder.md): helper installation, disk budgets, and fallback.
 - [Storage compatibility](docs/storage-compatibility.md): native access, layer
   discovery, mixed stores, and hash identities.
 - [Standalone commands](docs/standalone.md): sessions, events, and transfer-only validation.
