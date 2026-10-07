@@ -156,7 +156,7 @@ def test_digest_runtime_reference_uses_exact_registry_pin(monkeypatch, suffix):
 
 
 def test_digest_pin_requires_host_runtime_capability(monkeypatch):
-    import sparkrun.plugins as api
+    api = pytest.importorskip("sparkrun.plugins")
     from sparkrun_oci_relay.provider import RelayProvider
     monkeypatch.delattr(api, 'IMAGE_RUNTIME_API_VERSION')
     with pytest.raises(api.ImageDistributionUnsupported, match='image-runtime API'):
