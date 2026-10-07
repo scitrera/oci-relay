@@ -125,13 +125,13 @@ Reservations cover whole blobs before writing and never exceed the byte budget.
 Completed blobs remain until operation cleanup. A blob that does not fit the
 remaining budget streams without retention, increments `disk_cache_bypasses`,
 and may be downloaded again. This is a bounded first-fit cache, not an LRU or
-persistent cache. In the updated engine, a filesystem write failure removes
+persistent cache. In v0.1.2, a filesystem write failure removes
 the incomplete file, disables further cache writes, and continues verified
 upstream streaming.
 Waiting readers may refetch; this is reported as `disk_cache_write_errors`,
 not a successful cache fill. Upstream corruption and receiver write errors
 still fail the acquisition. The released v0.1.0 engine treats disk-write
-failures as acquisition failures; the graceful fallback needs a new binary.
+failures as acquisition failures; upgrade to use graceful cache-write fallback.
 
 The disk budget is separate from `max_buffer_bytes` and Docker push staging's
 `max_spool_bytes`. OS page cache, TLS and runtime memory remain outside the

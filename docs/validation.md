@@ -636,3 +636,46 @@ The corresponding-source archive successfully rebuilt the relay and native
 ARM64 helper with dependency downloads disabled. These checks qualify the
 release behavior; small fixture timings are not throughput benchmarks, and
 native macOS builds do not establish Docker Desktop support.
+
+## Parallel upstream ranges — v0.1.2 (2026-10-07)
+
+The engine tag pins `602c1fca1a9bcb65bf086cc9453e0d8a8fee576c`.
+Both the [pre-tag native qualification](https://github.com/scitrera/oci-relay/actions/runs/37668605298)
+and [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37669580367)
+passed on native Linux AMD64, Linux ARM64 and macOS ARM64 runners. No QEMU was
+used. Local Go race tests, vet, dependency-license checks and govulncheck passed;
+the full plugin suite passed all 359 tests with real Docker integration enabled.
+
+Range tests cover exact coverage, bounded shared memory, ordered output,
+cancellation, HTTP/2, authentication refresh during parallel downloads,
+cross-origin credential stripping, ordinary-response fallback, and rejection
+of malformed ranges, changed encoding, truncated bodies and incorrect digests.
+The source still verifies every complete blob; range downloading adds no extra
+SHA pass. Registry fixture imports cover fresh, partial-cache and warm images
+with upstream ranges and receiver decoding independently enabled/disabled.
+
+All three published bundles were independently checked for archive and binary
+SHA-256, version/platform, executable architecture, native source pins and
+redistributed notices. The normal plugin installer downloaded both Linux
+archives from GitHub and verified offline cache reuse. The corresponding-source
+archive rebuilt the relay and native ARM64 helper with dependency downloads
+disabled.
+
+The published ARM64 binary/helper also passed fresh, one-new-layer and warm
+registry imports on `.13` and `.17` over both CX7 subnets with two connections
+per link. These small fixtures lower the range/stripe thresholds to 8 MiB and
+use 8 MiB upstream ranges. Each missing roughly 32 MiB compressed layer was
+fetched in five non-overlapping ranges, shared by both receivers, and all four
+connections per receiver carried payload. The update reused its base; the warm
+case fetched/transferred zero layer bytes. Exact config identities and ordered
+DiffIDs matched. These are correctness fixtures, not line-rate benchmarks.
+Owned fixture images and operation resources were cleaned up; no model was
+launched and no Docker daemon was reconfigured.
+
+The post-release adapter adds verified archive pins and logs each staged
+engine's actual version, commit and protocol at INFO, including cache hits;
+DEBUG adds its binary hash and capabilities. The published-binary cluster runs
+confirmed v0.1.2 and the tagged commit on every execution host. The focused
+host/installer/fallback/range suite passed 96 tests after this logging change.
+No engine code changed after tagging. Platform limitations remain as described
+in [platform qualification](platforms.md).

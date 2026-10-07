@@ -54,7 +54,7 @@ do not edit generated workflow YAML independently.
    {
      "schema": 1,
      "repository": "https://github.com/scitrera/oci-relay.git",
-     "version": "0.1.1",
+     "version": "0.1.2",
      "commit": "FULL_ADAPTER_COMMIT_SHA"
    }
    ```

@@ -23,11 +23,11 @@ when a non-Linux controller has no explicit source host. That host must have the
 registry credentials; controller credentials are not silently forwarded.
 
 `push` and controller-local source paths do need a relay on the controller.
-The v0.1.1 plugin accepts **Linux execution hosts only**: architecture
+The v0.1.2 plugin accepts **Linux execution hosts only**: architecture
 detection, binary verification/staging, native Docker helpers and route probes
 assume Linux. A macOS binary does not by itself enable that plugin path.
 
-| Release binary | v0.1.1 qualification / role |
+| Release binary | v0.1.2 qualification / role |
 |---|---|
 | Linux arm64 | Native build, Go/helper tests, real Docker and multi-host transfers; Spark execution hosts |
 | Linux amd64 | Native build and Go/helper tests; real Docker qualification remains open |
@@ -45,7 +45,7 @@ are not Developer ID signed or notarized.
 ## Windows
 
 Both `windows/amd64` and `windows/arm64` cross-compile, but native Windows
-binaries are not published as supported v0.1.1 artifacts. Runtime portability
+binaries are not published as supported v0.1.2 artifacts. Runtime portability
 still requires work:
 
 - Protect session files using Windows ACLs; current checks require POSIX
@@ -62,7 +62,7 @@ execution avoids the need for a native Windows relay. This is an architectural
 path, not a claim of completed Windows controller qualification. Native Windows
 Sparkrun/SSH process support is a separate concern from Go cross-compilation.
 
-The v0.1.1 bundle workflows build and execute tests natively on Linux AMD64, Linux
+The v0.1.2 bundle workflows build and execute tests natively on Linux AMD64, Linux
 ARM64 and macOS ARM64. This supersedes the v0.1.0 cross-build arrangement; it
 does not imply Docker Desktop or native Windows execution qualification.
 See [bundled decoder builds](bundled-decoder.md).

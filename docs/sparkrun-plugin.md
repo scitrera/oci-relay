@@ -239,6 +239,10 @@ reports that it cannot support a request before destination transfer starts.
 
 ## Progress output
 
+At INFO verbosity, binary setup logs the verified engine version, commit and
+protocol for each execution host, including cache hits. DEBUG adds the binary
+SHA-256 and capabilities. These details do not add PROGRESS-level messages.
+
 The Sparkrun plugin shows image-transfer status at default verbosity, using
 Sparkrun's `PROGRESS` logging level. It reports preparation, cache discovery,
 per-host received layer bytes and throughput, known reused layers, Docker import,
