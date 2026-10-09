@@ -41,6 +41,7 @@ type stripeGroup struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	ready            chan struct{}
+	joinedAll        chan struct{}
 	mu               sync.Mutex
 	digest           digest.Digest
 	count            int
@@ -64,7 +65,7 @@ func (s *Server) stripeGroup(ctx context.Context, key string, d v1.Descriptor, c
 			return nil, errors.New("stripe group limit reached")
 		}
 		groupCtx, cancel := context.WithTimeout(s.ctx, 30*time.Minute)
-		g = &stripeGroup{ctx: groupCtx, cancel: cancel, ready: make(chan struct{}), digest: d.Digest, count: count, piece: piece, claimed: make([]bool, count)}
+		g = &stripeGroup{ctx: groupCtx, cancel: cancel, ready: make(chan struct{}), joinedAll: make(chan struct{}), digest: d.Digest, count: count, piece: piece, claimed: make([]bool, count)}
 		s.stripeGroups[key] = g
 	}
 	s.mu.Unlock()
@@ -147,6 +148,7 @@ func (s *Server) serveStripe(w http.ResponseWriter, r *http.Request, peer string
 	g.joined++
 	if g.joined == count {
 		g.joinTimer.Stop()
+		close(g.joinedAll)
 	}
 	g.mu.Unlock()
 	// Cancelling any lane terminates the group, including lanes not yet joined.
@@ -162,6 +164,28 @@ func (s *Server) serveStripe(w http.ResponseWriter, r *http.Request, peer string
 			g.cancel()
 		}
 	}()
+	// The client waits for all response headers before consuming any lane.
+	// Keep the same barrier here: otherwise a connection can fail after its
+	// headers while a sibling is still joining and turn that sibling's setup
+	// into a misleading HTTP 503. After joining, failures surface as body I/O
+	// errors and the client can discard/retry the whole blob on surviving paths.
+	select {
+	case <-g.joinedAll:
+	default:
+		select {
+		case <-g.joinedAll:
+		case <-g.ctx.Done():
+			select {
+			case <-g.joinedAll:
+				// Joining and cancellation can race; once joined, report a
+				// body failure rather than changing response metadata.
+			default:
+				err = g.ctx.Err()
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
 	w.Header().Set("Content-Length", formatSize(stripeLength(d.Size, count, lane, piece)))
 	w.Header().Set("Docker-Content-Digest", string(d.Digest))
 	w.Header().Set(stripingHeader, stripeFormat(count, lane, piece))

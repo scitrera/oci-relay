@@ -54,9 +54,18 @@ func qualifyReceiver(ctx context.Context, e *engine.Engine, o PullOptions) (stri
 	if o.NativeStore == "" && (o.NativeRoot != "" || o.NativeBase != "" || o.EngineVersion != "") {
 		return "", errors.New("native receiver options require --native-store")
 	}
+	if o.NativeStore != "" && !e.NativeStoreLocal() {
+		return "", errors.New("native receiver access requires a local Linux Unix-socket daemon")
+	}
+	if e.Runtime() == "wslc" {
+		return "wslc", nil
+	}
 	info, err := e.Client.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return "", err
+	}
+	if info.Info.OSType != "linux" {
+		return "", errors.New("only Linux container images are supported")
 	}
 	store := info.Info.Driver
 	for _, pair := range info.Info.DriverStatus {

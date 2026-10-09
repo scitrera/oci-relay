@@ -98,23 +98,24 @@ func (e *Engine) Discover(ctx context.Context, request InventoryRequest, budget 
 		out.Complete, out.StopReason = true, "no_layers"
 		return
 	}
-	listed, listErr := e.Client.ImageList(probe, client.ImageListOptions{All: true})
+	ids, listErr := e.ListImages(probe)
 	if listErr != nil {
 		err = partial(listErr)
 		return
 	}
-	ids, seen := []string{}, map[string]bool{}
-	for _, item := range listed.Items {
-		d := digest.Digest(item.ID)
+	unique, seen := []string{}, map[string]bool{}
+	for _, id := range ids {
+		d := digest.Digest(id)
 		if d.Validate() != nil || d.Algorithm() != digest.SHA256 {
 			err = errors.New("Docker returned invalid inventory image ID")
 			return
 		}
-		if !seen[item.ID] {
-			ids = append(ids, item.ID)
-			seen[item.ID] = true
+		if !seen[id] {
+			unique = append(unique, id)
+			seen[id] = true
 		}
 	}
+	ids = unique
 	out.Listed = len(ids)
 	for offset := 0; offset < len(ids); offset += 32 {
 		batch := ids[offset:min(offset+32, len(ids))]

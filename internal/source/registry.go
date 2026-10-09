@@ -100,7 +100,7 @@ func NewRegistry(parent context.Context, o RegistryOptions) (_ *Registry, return
 		return nil, errors.New("registry manifest requires SHA-256")
 	}
 	if o.Platform.OS == "" {
-		o.Platform = v1.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH}
+		o.Platform = v1.Platform{OS: "linux", Architecture: runtime.GOARCH}
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &Registry{ctx: ctx, cancel: cancel, budget: o.MaxCacheBytes, blobs: map[digest.Digest]*registryBlob{}}

@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -29,6 +30,9 @@ func (b decoderBytes) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) e
 	return e
 }
 func TestBundledDecoderIntegrity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows archive importer has no bundled Unix decoder")
+	}
 	gzipPath, e := exec.LookPath("gzip")
 	if e != nil {
 		t.Fatal(e)

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,7 +42,15 @@ func (c *StdioConn) SetDeadline(t time.Time) error {
 func (c *StdioConn) SetReadDeadline(t time.Time) error  { _ = c.In.SetReadDeadline(t); return nil }
 func (c *StdioConn) SetWriteDeadline(t time.Time) error { _ = c.Out.SetWriteDeadline(t); return nil }
 func Attach(ctx context.Context, socket string, in io.Reader, out io.Writer) error {
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	network := "unix"
+	if strings.HasPrefix(socket, "tcp://") {
+		network, socket = "tcp", strings.TrimPrefix(socket, "tcp://")
+		host, _, err := net.SplitHostPort(socket)
+		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+			return errors.New("stdio TCP attachment must use a loopback IP")
+		}
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, socket)
 	if err != nil {
 		return err
 	}
@@ -52,6 +61,9 @@ func Attach(ctx context.Context, socket string, in io.Reader, out io.Writer) err
 	go func() {
 		_, err := io.CopyBuffer(conn, in, make([]byte, 64<<10))
 		if u, ok := conn.(*net.UnixConn); ok {
+			_ = u.CloseWrite()
+		}
+		if u, ok := conn.(*net.TCPConn); ok {
 			_ = u.CloseWrite()
 		}
 		done <- err

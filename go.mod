@@ -4,6 +4,7 @@ go 1.26.9
 
 require (
 	d7y.io/dragonfly/v2 v2.5.3-rc.0.0.20260929132700-41b312389c90
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/docker/distribution v2.8.3+incompatible
@@ -17,7 +18,6 @@ require (
 )
 
 require (
-	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/bradenaw/juniper v0.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect

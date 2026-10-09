@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/privatefs"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -132,13 +133,8 @@ func (c Credentials) TLS(server bool) (*tls.Config, error) {
 	return config, nil
 }
 func (s *Session) Save(dir string) error {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := privatefs.Ensure(dir); err != nil {
 		return err
-	}
-	if info, err := os.Stat(dir); err != nil {
-		return err
-	} else if info.Mode().Perm()&0077 != 0 {
-		return errors.New("session directory must be private (0700)")
 	}
 	files := map[string]any{"session.json": s}
 	for id, creds := range s.Peers {

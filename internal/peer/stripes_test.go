@@ -167,6 +167,17 @@ func TestHTTP2LargeReceiveWindow(t *testing.T) {
 
 func TestStripeFailureRetriesWholeBlobOnSurvivors(t *testing.T) {
 	ctx, _, c := stripeFixture(t)
+	// Force the failed connection to be ready before the final lane joins.
+	// Without the server join barrier, this yields a setup HTTP 503 instead
+	// of the retryable body failure on the broken connection.
+	late := c.paths.paths[len(c.paths.paths)-1]
+	lateTransport := late.client.HTTP.Transport
+	late.client.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/stripes/") {
+			time.Sleep(25 * time.Millisecond)
+		}
+		return lateTransport.RoundTrip(r)
+	})
 	path := c.paths.paths[0]
 	original := path.client.HTTP.Transport
 	path.client.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -340,12 +351,45 @@ func TestRealDockerPullStriped(t *testing.T) {
 func TestStripeAbandonedGroupReleasesReaders(t *testing.T) {
 	ctx, s, c := stripeFixture(t)
 	d := s.Image.Descriptors[1]
-	response, err := c.request(ctx, "GET", "/relay/v1/stripes/"+string(d.Digest)+"?group=00000000000000000000000000000001&lanes=4&lane=0", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = response.Body.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		response, err := c.request(ctx, "GET", "/relay/v1/stripes/"+string(d.Digest)+"?group=00000000000000000000000000000001&lanes=4&lane=0", nil)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		done <- err
+	}()
+	// An incomplete group cannot return headers. Abandon the request after its
+	// lane joins, then verify that cancellation releases retained source data.
+	joined := false
 	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !joined {
+		s.mu.Lock()
+		for _, g := range s.stripeGroups {
+			g.mu.Lock()
+			joined = g.joined > 0
+			g.mu.Unlock()
+		}
+		s.mu.Unlock()
+		if !joined {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !joined {
+		t.Fatal("stripe request did not join")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("abandoned stripe: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("abandoned stripe did not cancel")
+	}
+	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
 		count := len(s.stripeGroups)

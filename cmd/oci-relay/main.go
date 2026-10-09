@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/spark-arena/oci-relay/internal/engine"
 	"github.com/spark-arena/oci-relay/internal/image"
 	"github.com/spark-arena/oci-relay/internal/peer"
+	"github.com/spark-arena/oci-relay/internal/privatefs"
 	"github.com/spark-arena/oci-relay/internal/source"
 	"github.com/spark-arena/oci-relay/internal/transfer"
 )
@@ -45,8 +47,22 @@ func run(ctx context.Context, args []string) error {
 		return errors.New("usage: oci-relay {version|session|serve|run|peer|attach|prepare|inventory} [options]")
 	}
 	switch args[0] {
+	case "private-directory":
+		fs := flags("private-directory")
+		path := fs.String("path", "", "operation directory to protect")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *path == "" {
+			return errors.New("--path is required")
+		}
+		return privatefs.Ensure(*path)
 	case "version", "--version":
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion, "capabilities": []string{"receiver-unpigz-v1", "registry-range-v1"}})
+		capabilities := []string{"registry-range-v1", "runtime-endpoints-v1", "archive-import-v1"}
+		if runtime.GOOS != "windows" {
+			capabilities = append(capabilities, "receiver-unpigz-v1")
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": buildinfo.Version, "commit": buildinfo.Commit, "protocol": peer.ProtocolVersion, "capabilities": capabilities})
 	case "session":
 		fs := flags("session")
 		dir := fs.String("out", "", "private output directory")
@@ -69,7 +85,8 @@ func run(ctx context.Context, args []string) error {
 		return receive(ctx, args[1:])
 	case "inventory":
 		fs := flags("inventory")
-		host := fs.String("docker-host", "", "local Docker Unix socket")
+		var connection engine.Config
+		runtimeFlags(fs, &connection)
 		timeout := fs.Int("timeout-seconds", 10, "metadata discovery budget (1 to 300 seconds)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -85,7 +102,7 @@ func run(ctx context.Context, args []string) error {
 		if err = json.Unmarshal(raw, &request); err != nil {
 			return err
 		}
-		e, err := engine.New(*host)
+		e, err := engine.Open(connection)
 		if err != nil {
 			return err
 		}
@@ -129,25 +146,25 @@ type plan struct {
 	Layout                      string `json:"layout"`
 	Platform                    string `json:"platform"`
 	Manifest                    string `json:"manifest"`
-	DockerHost                  string `json:"docker_host"`
-	DockerRoot                  string `json:"docker_root"`
-	EngineVersion               string `json:"engine_version"`
-	SocketUID                   *int   `json:"socket_uid,omitempty"`
-	SocketGID                   *int   `json:"socket_gid,omitempty"`
-	SessionDir                  string `json:"session_dir"`
-	Listen                      string `json:"listen"`
-	Advertise                   string `json:"advertise"`
-	Socket                      string `json:"socket"`
-	AllowPreparationRead        bool   `json:"allow_preparation_read"`
-	MaxBuffer                   int64  `json:"max_buffer_bytes"`
-	MaxSpool                    int64  `json:"max_spool_bytes"`
-	MaxUpload                   int64  `json:"max_upload_bytes"`
-	SpoolDir                    string `json:"spool_dir"`
-	SourceStreams               int    `json:"source_streams"`
-	SourceJoinMilliseconds      int    `json:"source_join_milliseconds"`
-	TimeoutSeconds              int    `json:"timeout_seconds"`
-	LeaseSeconds                int    `json:"lease_seconds"`
-	ManagedStdin                bool   `json:"managed_stdin"`
+	engine.Config
+	DockerRoot             string `json:"docker_root"`
+	EngineVersion          string `json:"engine_version"`
+	SocketUID              *int   `json:"socket_uid,omitempty"`
+	SocketGID              *int   `json:"socket_gid,omitempty"`
+	SessionDir             string `json:"session_dir"`
+	Listen                 string `json:"listen"`
+	Advertise              string `json:"advertise"`
+	Socket                 string `json:"socket"`
+	AllowPreparationRead   bool   `json:"allow_preparation_read"`
+	MaxBuffer              int64  `json:"max_buffer_bytes"`
+	MaxSpool               int64  `json:"max_spool_bytes"`
+	MaxUpload              int64  `json:"max_upload_bytes"`
+	SpoolDir               string `json:"spool_dir"`
+	SourceStreams          int    `json:"source_streams"`
+	SourceJoinMilliseconds int    `json:"source_join_milliseconds"`
+	TimeoutSeconds         int    `json:"timeout_seconds"`
+	LeaseSeconds           int    `json:"lease_seconds"`
+	ManagedStdin           bool   `json:"managed_stdin"`
 }
 
 func serve(parent context.Context, command string, args []string) (returnErr error) {
@@ -168,7 +185,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	fs.StringVar(&p.Layout, "layout", "", "existing OCI-layout directory")
 	fs.StringVar(&p.Platform, "platform", "", "os/architecture[/variant]")
 	fs.StringVar(&p.Manifest, "manifest", "", "raw platform manifest input")
-	fs.StringVar(&p.DockerHost, "docker-host", "", "local Docker Unix socket")
+	runtimeFlags(fs, &p.Config)
 	fs.StringVar(&p.SessionDir, "session-dir", "", "private credential directory")
 	fs.StringVar(&p.Listen, "listen", p.Listen, "peer listener address")
 	fs.StringVar(&p.Advertise, "advertise", "", "advertised source host/IP")
@@ -322,7 +339,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 		if p.Image == "" || p.Manifest != "" {
 			return errors.New("docker-save requires --image and supplies its own OCI manifest; do not pass --manifest")
 		}
-		eng, err := engine.New(p.DockerHost)
+		eng, err := engine.Open(p.Config)
 		if err != nil {
 			return err
 		}
@@ -358,11 +375,14 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 				return err
 			}
 		}
-		eng, err := engine.New(p.DockerHost)
+		eng, err := engine.Open(p.Config)
 		if err != nil {
 			return err
 		}
 		defer eng.Close()
+		if !eng.NativeStoreLocal() {
+			return errors.New("Docker push source requires a local Linux daemon; use docker-save with an explicit spool budget or registry")
+		}
 		dockerSource, err = source.NewDocker(ctx, eng, source.DockerOptions{Reference: p.Image, Manifest: raw, Platform: platform, AllowPreparationRead: p.AllowPreparationRead, MaxSpool: p.MaxSpool, MaxUpload: p.MaxUpload, SpoolDir: p.SpoolDir})
 		if err != nil {
 			return err
@@ -392,7 +412,7 @@ func serve(parent context.Context, command string, args []string) (returnErr err
 	cache.ConcurrentReplay = p.Source == "docker-save" || p.Source == "oci-layout" || p.Source == "docker-classic" || p.Source == "docker-containerd"
 	cache.JoinReaders = len(sess.Peers) - 1 // Manager never consumes blobs.
 	cache.JoinWindow = time.Duration(p.SourceJoinMilliseconds) * time.Millisecond
-	if p.Socket == "" {
+	if p.Socket == "" && runtime.GOOS != "windows" {
 		p.Socket = filepath.Join(p.SessionDir, "source.sock")
 	}
 	s, err := peer.NewServer(ctx, sess, im, cache, p.Listen, p.Socket, time.Duration(p.LeaseSeconds)*time.Second)
@@ -540,7 +560,8 @@ func receive(parent context.Context, args []string) error {
 	fs.Int64Var(&options.Decode.ReserveBytes, "decode-reserve-bytes", 16<<30, "disk reserve beyond scratch and Docker import allowance")
 	inventoryPath := fs.String("cache-inventory", "", "private JSON cache discovery hints from the inventory command")
 	fs.StringVar(&options.Tag, "tag", "", "destination image tag")
-	fs.StringVar(&options.DockerHost, "docker-host", "", "local Docker Unix socket")
+	runtimeFlags(fs, &options.Config)
+	fs.StringVar(&options.ImportDirectory, "import-spool-dir", "", "WSLC archive staging parent directory")
 	fs.StringVar(&options.NativeStore, "native-store", "", "qualified receiver native store: overlay2 or containerd")
 	fs.StringVar(&options.NativeBase, "native-base", "", "optional pinned local base image ID from coordinator inventory")
 	fs.StringVar(&options.NativeRoot, "native-root", "", "read-only receiver store/content root")
@@ -550,7 +571,7 @@ func receive(parent context.Context, args []string) error {
 	fs.Int64Var(&options.Memory, "max-buffer-bytes", 128<<20, "receiver cache byte budget")
 	fs.IntVar(&options.Parallel, "max-source-streams", 4, "receiver source streams")
 	fs.IntVar(&options.Retries, "max-retries", 2, "receiver pull retries")
-	fs.StringVar(&options.Import, "import", "pull", "receiver import: pull, load-cached, or experimental load")
+	fs.StringVar(&options.Import, "import", "pull", "receiver import: pull, archive (VM/remote runtime), load-cached, or experimental load")
 	fs.Int64Var(&options.MaxImport, "max-import-bytes", 0, "explicit Docker load scratch archive byte budget; required for load modes")
 	if err := fs.Parse(args); err != nil {
 		return err

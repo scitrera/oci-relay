@@ -121,21 +121,22 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type PullOptions struct {
-	Decode        DecodeOptions
-	SkipPresent   bool
-	DockerHost    string
-	Tag           string
-	ReplaceTag    bool
-	Memory        int64
-	Parallel      int
-	Retries       int
-	Import        string
-	MaxImport     int64
-	NativeStore   string
-	NativeBase    string
-	NativeRoot    string
-	EngineVersion string
-	Inventory     *engine.Inventory
+	Decode      DecodeOptions
+	SkipPresent bool
+	engine.Config
+	ImportDirectory string
+	Tag             string
+	ReplaceTag      bool
+	Memory          int64
+	Parallel        int
+	Retries         int
+	Import          string
+	MaxImport       int64
+	NativeStore     string
+	NativeBase      string
+	NativeRoot      string
+	EngineVersion   string
+	Inventory       *engine.Inventory
 }
 
 func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err error) {
@@ -168,7 +169,7 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	if o.Import == "" {
 		o.Import = "pull"
 	}
-	if o.Import != "pull" && o.Import != "load" && o.Import != "load-cached" {
+	if o.Import != "pull" && o.Import != "load" && o.Import != "load-cached" && o.Import != "archive" {
 		return result, errors.New("unknown receiver import mode")
 	}
 	if o.Import != "pull" && (o.MaxImport < 4<<20 || o.MaxImport > 1<<50) {
@@ -185,11 +186,14 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 		return result, err
 	}
 	result.Manifest = string(im.Digest)
-	e, err := engine.New(o.DockerHost)
+	e, err := engine.Open(o.Config)
 	if err != nil {
 		return result, err
 	}
 	defer e.Close()
+	if !e.NativeStoreLocal() && o.Import != "archive" {
+		return result, errors.New("a remote or VM runtime requires --import archive and --max-import-bytes")
+	}
 	target := string(im.Descriptors[0].Digest)
 	result.ConfigDigest = target
 	if o.Inventory != nil {
@@ -291,15 +295,18 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 		}
 	}
 	progress.phase("transferring")
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return result, err
+	tempTag := "oci-relay/import:" + c.Credentials.Transfer + "-" + c.Credentials.Peer
+	if o.Import != "archive" {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return result, err
+		}
+		repo := "relay/" + c.Credentials.Transfer
+		server := &http.Server{Handler: decoded.registry(cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
+		go func() { _ = server.Serve(listener) }()
+		defer server.Close()
+		tempTag = listener.Addr().String() + "/" + repo + ":transfer"
 	}
-	repo := "relay/" + c.Credentials.Transfer
-	server := &http.Server{Handler: decoded.registry(cache, repo), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
-	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
-	tempTag := listener.Addr().String() + "/" + repo + ":transfer"
 	defer func() {
 		progress.phase("cleanup")
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -311,7 +318,15 @@ func Pull(ctx context.Context, c *Client, o PullOptions) (result Result, err err
 	}()
 	pullStart := time.Now()
 	loaded := false
-	if o.Import != "pull" {
+	if o.Import == "archive" {
+		progress.phase("importing")
+		loaded = true
+		err = importArchive(ctx, e, view, cache, tempTag, o, &result)
+		result.PullSeconds = time.Since(pullStart).Seconds()
+		if err != nil {
+			return result, err
+		}
+	} else if o.Import != "pull" {
 		progress.phase("importing")
 		loaded, err = loadImage(ctx, e, view, cache, tempTag, o, &result)
 		result.PullSeconds = time.Since(pullStart).Seconds()

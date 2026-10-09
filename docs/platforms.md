@@ -21,47 +21,97 @@ The updated plugin also selects the first Linux receiver as registry fetcher
 when a non-Linux controller has no explicit source host. That host must have the
 registry credentials; controller credentials are not silently forwarded.
 
-`push` and controller-local source paths do need a relay on the controller.
-The v0.1.3 plugin accepts **Linux execution hosts only**: architecture
-detection, binary verification/staging, native Docker helpers and route probes
-assume Linux. A macOS binary does not by itself enable that plugin path.
+## Development support
 
-| Release binary | v0.1.3 qualification / role |
-|---|---|
-| Linux arm64 | Native build, Go/helper tests, real Docker and multi-host transfers; Spark execution hosts |
-| Linux amd64 | Native build and Go/helper tests; real Docker qualification remains open |
-| macOS arm64 | Native build and Go/helper tests; Docker Desktop qualification remains open |
+The working tree adds Windows x64/ARM64 runtime support. These changes are
+**not included in the published v0.1.3 binaries**. Use a candidate built from
+this tree and its matching editable plugin during qualification.
 
-The macOS archive can be used for standalone registry or OCI-layout sources
-and transfer-only receivers, subject to that qualification limit. Set
-`--platform linux/arm64` (or the receiver's actual platform) for registry sources:
-the source's default platform otherwise follows the machine running it. Docker
-operations require an explicit local Unix socket; Docker contexts and
-`DOCKER_HOST` are not resolved automatically. Native Linux store access is not
-supported against Docker Desktop's VM from the macOS process. Release binaries
-are not Developer ID signed or notarized.
+| Execution host | Runtime path | Qualification |
+|---|---|---|
+| Linux arm64 | Native overlay2/containerd and existing registry importer | Existing real-engine and cluster coverage |
+| Linux amd64 | Same implementation | Native CI; broader real-engine coverage remains open |
+| macOS arm64 | Standalone registry/layout sources; Docker context plus archive import | Native build/tests; Desktop runtime qualification remains open |
+| Windows x64/ARM64 | Registry/layout sources, Docker named pipe or TCP/TLS, archive import | Candidate builds and native CI tests; Desktop end-to-end qualification remains open |
+| Windows + WSLC | Experimental public CLI adapter, bounded archive import/export | CLI contract tests; real WSLC qualification remains open |
 
-## Windows
+The Windows qualification workflow runs tests on `windows-2025` and
+`windows-11-arm`, without QEMU, including a real local named-pipe HTTP server,
+protected credential-directory ACLs, binary subprocess pipes, and the transfer
+protocol. It does not install or qualify Docker Desktop or WSLC. Candidate
+artifacts are separate from the repo-tools-generated release pipeline.
 
-Both `windows/amd64` and `windows/arm64` cross-compile, but native Windows
-binaries are not published as supported v0.1.3 artifacts. Runtime portability
-still requires work:
+## Docker connections
 
-- Protect session files using Windows ACLs; current checks require POSIX
-  private-directory/file permissions.
-- Support Docker named pipes; the engine client currently permits only local
-  Unix sockets.
-- Qualify the optional Unix-socket attachment transport or supply a Windows
-  alternative. Direct TCP/HTTP/2 itself is portable.
-- Replace the plugin's Linux shell utilities and binary/host probes for native
-  Windows execution.
+Standalone commands accept `--docker-host` (`unix://`, local `npipe://`, or
+`tcp://`) and `--docker-context`. With neither supplied, selection follows
+`DOCKER_CONTEXT`, then `DOCKER_HOST`, then the current Docker context. The default
+context uses the platform default: a named pipe on Windows, Unix socket on Unix.
+An explicitly selected host overrides the environment's context.
 
-For Windows control machines, running Sparkrun under WSL with delegated Linux
-execution avoids the need for a native Windows relay. This is an architectural
-path, not a claim of completed Windows controller qualification. Native Windows
-Sparkrun/SSH process support is a separate concern from Go cross-compilation.
+For TCP, `--docker-tls`, `--docker-ca`, `--docker-cert`, and `--docker-key` enable
+verified TLS; `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, and named-context TLS files
+are recognized. Skipping certificate verification is unsupported. Non-loopback
+plaintext TCP requires `--docker-allow-plain-http`. Nothing enables a Docker
+TCP listener or changes daemon settings automatically.
 
-The v0.1.3 bundle workflows build and execute tests natively on Linux AMD64, Linux
-ARM64 and macOS ARM64. This supersedes the v0.1.0 cross-build arrangement; it
-does not imply Docker Desktop or native Windows execution qualification.
-See [bundled decoder builds](bundled-decoder.md).
+A Windows controller can run Docker Desktop without enabling port 2375. The
+named pipe / selected context is the default; configured TCP remains an option.
+See [Docker's connection FAQ](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/general/).
+
+## VM-safe imports and local sources
+
+Use `peer --import archive --max-import-bytes BUDGET` when the daemon is remote
+or inside a VM. Verified layer blobs stream into a combined OCI/Docker archive
+through Docker's ImageLoad API. The relay needs no receiver registry port or
+VM-to-host loopback route. Docker may still stage/unpack data internally.
+
+The archive preserves the original OCI manifest and config for containerd;
+classic Docker checks the config and ordered uncompressed layer hashes. An
+exact image already present can skip transfer with `--skip-present`. The initial
+portable path sends a full archive when import is required: it does **not** yet
+provide the Linux native-store path's minimal partial-layer transfer. Windows
+and remote-daemon native filesystem access is deliberately unqualified.
+
+For a local Desktop/WSLC source, use `--source docker-save --allow-preparation-read
+--max-spool-bytes BUDGET`. This stages a bounded export once and then serves its
+layers through the normal verified parallel relay. Both OCI-layout and classic
+Docker-save archives are accepted. The relay does not assume access to the VM's
+image-store files. Registry sources avoid that export step; their default image
+OS is Linux, independently of the control host's OS. Select `--platform
+linux/arm64` explicitly when an x64 controller serves ARM receivers.
+
+## WSLC
+
+Select `--runtime wslc`, optionally `--wslc-session NAME` and
+`--wslc-executable PATH`. The adapter uses public `image inspect/list/save/load/tag/rm`
+commands with argument arrays, not a shell or private VM protocol. Metadata
+failures remain failures; a structured missing-image result is a cache miss.
+
+WSLC's current CLI `image load --input` requires a seekable file. The adapter
+stages one private archive, checks its declared budget and available space plus
+1 GiB reserve, verifies the complete input before invoking WSLC, and removes it
+on success or failure. `--import-spool-dir` selects the staging parent. This
+allowance covers relay staging, not the runtime's additional unpacked storage.
+Docker Desktop imports stream through its API instead of this extra staging
+file. This is based on the public implementation at
+[WSL revision 341f1dd](https://github.com/microsoft/WSL/blob/341f1ddf76f089ff6351590b03f92bad30041725/src/windows/wslc/services/ImageService.cpp).
+
+## Sparkrun integration
+
+A Windows controller can coordinate Linux SSH nodes without running a local Go
+relay. The plugin continues to delegate registry fetching to a Linux receiver
+by default. For a Windows-local Desktop or WSLC image source, the updated plugin
+supports a native Windows relay and per-host runtime settings. See
+[configuration examples](windows.md).
+
+Remote execution hosts managed through Sparkrun SSH are still Linux. A Windows
+receiver can use the standalone Go CLI; native Windows SSH target orchestration
+and a WSLC workload executor are separate follow-up work. No GB10 CPU affinity
+mask is applied to N1X: its Windows scheduler and core topology require their
+own qualification. Windows uses buffered file reads; Linux keeps its existing
+direct-read policy. Windows bundles do not require or advertise `unpigz`.
+
+Before a Windows release, run real Desktop and WSLC cold/warm imports, a mixed
+Windows/Linux transfer, cancellation and disk-full cases. Qualification must
+include actual runtime image identities and cleanup, not only compilation.

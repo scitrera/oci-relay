@@ -34,6 +34,9 @@ func TestExtractionProgressTracksOldestActiveLayerAndDeduplicatesCompletion(t *t
 	next := event
 	next.ID = "123456abcdef"
 	p.docker(next)
+	p.mu.Lock()
+	p.extracts[next.ID].started = p.extracts[event.ID].started
+	p.mu.Unlock()
 	got := p.snapshot()
 	if got.ExtractingLayer != event.ID || got.ExtractCurrent != 50 || got.ExtractTotal != 100 || !validProgress(got) {
 		t.Fatalf("bad extraction progress: %+v", got)
