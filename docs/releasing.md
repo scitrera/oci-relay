@@ -55,7 +55,7 @@ do not edit generated workflow YAML independently.
    ```json
    {
      "schema": 1,
-     "repository": "https://github.com/scitrera/oci-relay.git",
+     "repository": "https://github.com/spark-arena/oci-relay.git",
      "version": "0.1.3",
      "commit": "FULL_ADAPTER_COMMIT_SHA"
    }
