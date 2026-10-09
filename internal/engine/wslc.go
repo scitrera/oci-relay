@@ -21,8 +21,8 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/privatefs"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/privatefs"
 )
 
 // WSLC's public CLI preserves Docker inspect JSON and streams image save to

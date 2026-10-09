@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/moby/moby/client"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 // Config describes the runtime connection, independently of the relay's OS or

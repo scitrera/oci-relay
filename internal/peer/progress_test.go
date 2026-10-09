@@ -14,8 +14,8 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/engine"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 type progressFixtureSource func(context.Context, v1.Descriptor, io.Writer) error

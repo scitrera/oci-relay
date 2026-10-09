@@ -14,9 +14,9 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/engine"
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 // portableEntries emits an OCI layout plus Docker's manifest.json. Both stores

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func TestRegistrySharesSHAWithSourceCache(t *testing.T) {

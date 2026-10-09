@@ -612,7 +612,7 @@ daemon configuration changes are needed.
 
 ## Native bundles and receiver decoding — v0.1.1 (2026-10-07)
 
-The [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37567182305)
+The [tagged release workflow](https://github.com/spark-arena/oci-relay/actions/runs/37567182305)
 passed Go race tests and native helper build/execution checks on Linux AMD64,
 Linux ARM64 and macOS ARM64. No QEMU was used. Linux helpers have no dynamic
 loader dependency; the macOS helper links only system libraries plus static
@@ -640,8 +640,8 @@ native macOS builds do not establish Docker Desktop support.
 ## Parallel upstream ranges — v0.1.2 (2026-10-07)
 
 The engine tag pins `602c1fca1a9bcb65bf086cc9453e0d8a8fee576c`.
-Both the [pre-tag native qualification](https://github.com/scitrera/oci-relay/actions/runs/37668605298)
-and [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37669580367)
+Both the [pre-tag native qualification](https://github.com/spark-arena/oci-relay/actions/runs/37668605298)
+and [tagged release workflow](https://github.com/spark-arena/oci-relay/actions/runs/37669580367)
 passed on native Linux AMD64, Linux ARM64 and macOS ARM64 runners. No QEMU was
 used. Local Go race tests, vet, dependency-license checks and govulncheck passed;
 the full plugin suite passed all 359 tests with real Docker integration enabled.
@@ -683,14 +683,13 @@ in [platform qualification](platforms.md).
 ## Apache licensing and patched toolchain — v0.1.3 (2026-10-09)
 
 OCI Relay and its plugin now use Apache-2.0. First-party headers, package
-metadata, the CLA's Project License reference, vendoring and binary packaging
-were updated; the former Sparkrun-specific exception was removed. Copyright
-and third-party notices were preserved. The current alpha adapter pins only
+metadata, vendoring and binary packaging were updated. Copyright and
+third-party notices were preserved. The current alpha adapter pins only
 the matching v0.1.3 engine; no older-release compatibility path is maintained.
 
 The engine tag pins `0ed36d35927819d9bba9b7ed4e1384f75a946761`.
-Both [pre-tag native qualification](https://github.com/scitrera/oci-relay/actions/runs/37951023726)
-and the [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37952111458)
+Both [pre-tag native qualification](https://github.com/spark-arena/oci-relay/actions/runs/37951023726)
+and the [tagged release workflow](https://github.com/spark-arena/oci-relay/actions/runs/37952111458)
 passed on Linux AMD64, Linux ARM64 and macOS ARM64. Builds used native runners,
 without QEMU. Qualification initially found newly published standard-library
 vulnerabilities in Go 1.25.14, so the minimum and build toolchain were raised to
@@ -701,9 +700,8 @@ There are no application-level Go transfer changes in this release.
 
 All three published bundles passed independent archive/binary checksum,
 architecture, version/platform, native source-pin and license checks. Apache
-LICENSE and COPYRIGHT contents matched the repository, and the obsolete
-exception was absent. Wheel and sdist checks verified the version, Apache
-metadata, license contents and current release pins. The source archive matched
+LICENSE and COPYRIGHT contents matched the repository. Wheel and sdist checks
+verified the version, Apache metadata, license contents and current release pins. The source archive matched
 all 141 tagged files and rebuilt the relay and native ARM64 helper with dependency
 downloads disabled. Both Linux bundles passed offline installation checks.
 

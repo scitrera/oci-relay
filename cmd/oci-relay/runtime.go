@@ -5,7 +5,7 @@ package main
 
 import (
 	"flag"
-	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/engine"
 )
 
 func runtimeFlags(fs *flag.FlagSet, c *engine.Config) {

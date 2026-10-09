@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/scitrera/oci-relay/internal/engine"
-	"github.com/scitrera/oci-relay/internal/source"
-	"github.com/scitrera/oci-relay/internal/testutil"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/source"
+	"github.com/spark-arena/oci-relay/internal/testutil"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func stripeFixture(t *testing.T) (context.Context, *Server, *Client) {

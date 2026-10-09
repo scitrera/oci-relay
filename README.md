@@ -18,7 +18,7 @@ resource limits, and reports progress.
 Native access supports qualified rootful Linux Docker 29+ stores. Real-engine
 qualification currently covers Linux arm64. Linux amd64, Linux arm64 and macOS
 arm64 bundles are built and tested on native runners. See [platform support](docs/platforms.md), [storage compatibility](docs/storage-compatibility.md) and
-[validation](docs/validation.md). Published binaries are available from [GitHub releases](https://github.com/scitrera/oci-relay/releases).
+[validation](docs/validation.md). Published binaries are available from [GitHub releases](https://github.com/spark-arena/oci-relay/releases).
 
 ## Quick start with Sparkrun
 
@@ -64,8 +64,8 @@ CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
 ## License and contributions
 
 Copyright 2026 Scitrera LLC. OCI Relay and its Sparkrun plugin are licensed
-under [Apache-2.0](LICENSE). No Sparkrun-specific license exception is needed.
+under [Apache-2.0](LICENSE).
 
 See [third-party notices](THIRD_PARTY_NOTICES.md) and
-[dependency licenses](THIRD_PARTY_LICENSES.txt). Contributions require the
-[CLA](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
+[dependency licenses](THIRD_PARTY_LICENSES.txt). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.

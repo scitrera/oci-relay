@@ -13,6 +13,10 @@ license-files = ["LICENSE", "COPYRIGHT"]
 authors = [{name = "Scitrera LLC"}]
 dependencies = ["sparkrun>=0.4.0,<0.5"]
 
+[project.urls]
+Repository = "https://github.com/spark-arena/oci-relay"
+Issues = "https://github.com/spark-arena/oci-relay/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=8"]
 

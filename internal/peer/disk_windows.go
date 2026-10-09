@@ -3,6 +3,6 @@
 
 package peer
 
-import "github.com/scitrera/oci-relay/internal/privatefs"
+import "github.com/spark-arena/oci-relay/internal/privatefs"
 
 func availableDisk(path string) (int64, error) { return privatefs.Available(path) }

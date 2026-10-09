@@ -1,4 +1,4 @@
-module github.com/scitrera/oci-relay
+module github.com/spark-arena/oci-relay
 
 go 1.26.9
 

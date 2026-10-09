@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func twoPaths(t *testing.T, leaf *Client) *Client {

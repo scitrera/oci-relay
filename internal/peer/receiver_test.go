@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/source"
-	"github.com/scitrera/oci-relay/internal/testutil"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/source"
+	"github.com/spark-arena/oci-relay/internal/testutil"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func saturatedRegistry(t *testing.T) *Registry {
