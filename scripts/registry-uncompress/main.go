@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/source"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/source"
 )
 
 func main() {

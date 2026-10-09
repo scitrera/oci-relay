@@ -10,7 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/containerd/errdefs"
-	"github.com/scitrera/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/engine"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,10 +22,10 @@ import (
 	"github.com/moby/moby/client"
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/image"
-	"github.com/scitrera/oci-relay/internal/source"
-	"github.com/scitrera/oci-relay/internal/testutil"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/source"
+	"github.com/spark-arena/oci-relay/internal/testutil"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func rawLayout(t *testing.T, size int) (string, *image.Image) {

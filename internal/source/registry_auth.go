@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 // RegistryCredentials are read on the fetcher, never sent to relay receivers.

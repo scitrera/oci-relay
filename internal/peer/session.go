@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 	"math/big"
 	"os"
 	"path/filepath"

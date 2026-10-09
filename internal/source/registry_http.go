@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/docker/distribution/registry/client/auth/challenge"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 type registryHTTP struct {

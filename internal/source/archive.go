@@ -18,9 +18,9 @@ import (
 
 	"github.com/moby/moby/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/engine"
-	"github.com/scitrera/oci-relay/internal/fileio"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/engine"
+	"github.com/spark-arena/oci-relay/internal/fileio"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 type ArchiveOptions struct {

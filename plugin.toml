@@ -2,7 +2,7 @@ schema = 1
 name = "oci-relay"
 module = "sparkrun.plugins.oci_relay"
 feature = "plugins.oci_relay"
-repository = "https://github.com/scitrera/oci-relay.git"
+repository = "https://github.com/spark-arena/oci-relay.git"
 sparkrun = ">=0.4.0,<0.5"
 source = "plugin/src/sparkrun_oci_relay"
 tests = "plugin/vendor_tests/test_oci_relay_*.py"

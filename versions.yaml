@@ -41,7 +41,7 @@ ci:
       - name: oci-relay
         project: oci-relay
         package: ./cmd/oci-relay
-        ldflags: "-s -w -buildid= -X github.com/scitrera/oci-relay/internal/buildinfo.Version=$VERSION -X github.com/scitrera/oci-relay/internal/buildinfo.Commit=$COMMIT"
+        ldflags: "-s -w -buildid= -X github.com/spark-arena/oci-relay/internal/buildinfo.Version=$VERSION -X github.com/spark-arena/oci-relay/internal/buildinfo.Commit=$COMMIT"
         platform_runners:
           linux/amd64: ubuntu-24.04
           linux/arm64: ubuntu-24.04-arm
