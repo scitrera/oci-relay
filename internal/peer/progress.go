@@ -138,6 +138,7 @@ type receiverProgress struct {
 
 type layerExtraction struct {
 	started, updated time.Time
+	order            int
 	current, total   int64
 	done             bool
 }
@@ -162,7 +163,7 @@ func (p *receiverProgress) docker(event engine.Progress) {
 		if len(p.extracts) >= image.MaxDescriptors-1 {
 			return
 		}
-		layer = &layerExtraction{started: now, updated: now}
+		layer = &layerExtraction{started: now, updated: now, order: len(p.extracts)}
 		p.extracts[event.ID] = layer
 	}
 	if event.Status == "Pull complete" {
@@ -244,7 +245,8 @@ func (p *receiverProgress) snapshot() ReceiverProgress {
 	p.value.ExtractSeconds, p.value.ExtractUpdateAge = 0, 0
 	var oldest *layerExtraction
 	for id, layer := range p.extracts {
-		if !layer.done && (oldest == nil || layer.started.Before(oldest.started)) {
+		// Clock resolution may give adjacent events identical timestamps.
+		if !layer.done && (oldest == nil || layer.order < oldest.order) {
 			oldest = layer
 			p.value.ExtractingLayer = id
 		}
