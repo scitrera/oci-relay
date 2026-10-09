@@ -1,7 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Scitrera LLC
-SPDX-License-Identifier: AGPL-3.0-only
-SPDX-FileComment: The Sparkrun additional permission in LICENSE_EXCEPTION applies.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # OCI Relay
@@ -63,11 +62,8 @@ CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
 
 ## License and contributions
 
-Copyright 2026 Scitrera LLC. OCI Relay is [AGPL-3.0-only](LICENSE), with a
-[Sparkrun additional permission](LICENSE_EXCEPTION) allowing combination and
-vendoring while Sparkrun's Apache-licensed portions retain Apache-2.0.
-OCI Relay remains AGPL, including applicable corresponding-source obligations.
-Ship both license documents with binaries and plugin copies.
+Copyright 2026 Scitrera LLC. OCI Relay and its Sparkrun plugin are licensed
+under [Apache-2.0](LICENSE). No Sparkrun-specific license exception is needed.
 
 See [third-party notices](THIRD_PARTY_NOTICES.md) and
 [dependency licenses](THIRD_PARTY_LICENSES.txt). Contributions require the

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 """Collect license and notice files from modules actually linked into the binary."""
 import argparse
 import json

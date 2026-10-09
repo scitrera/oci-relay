@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparkrun-oci-relay-plugin"
-version = "0.1.2"
+version = "0.1.3"
 description = "Bounded OCI image distribution for Sparkrun"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "AGPL-3.0-only"
-license-files = ["LICENSE", "LICENSE_EXCEPTION"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "COPYRIGHT"]
 authors = [{name = "Scitrera LLC"}]
 dependencies = ["sparkrun>=0.4.0,<0.5"]
 
@@ -23,7 +23,7 @@ oci-relay = "sparkrun_oci_relay"
 where = ["plugin/src"]
 
 [tool.setuptools.package-data]
-sparkrun_oci_relay = ["releases.json", "LICENSE", "LICENSE_EXCEPTION"]
+sparkrun_oci_relay = ["releases.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["plugin/tests"]

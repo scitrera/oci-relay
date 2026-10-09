@@ -1,7 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Scitrera LLC
-SPDX-License-Identifier: AGPL-3.0-only
-SPDX-FileComment: The sparkrun additional permission in LICENSE_EXCEPTION applies.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # Contributing to OCI Relay
@@ -31,24 +30,23 @@ rights under the project's software license.
 Submit only work you authored or are authorized to contribute, including any
 required employer authorization. Identify third-party material and its source
 and license. Preserve its original notices; do not attribute imported code
-solely to Scitrera LLC or assume our Sparkrun exception changes its license.
+solely to Scitrera LLC or assume the project's license changes its license.
 
 For new Scitrera-authored Go files, use:
 
 ```go
 // SPDX-FileCopyrightText: 2026 Scitrera LLC
-// SPDX-License-Identifier: AGPL-3.0-only
-// Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+// SPDX-License-Identifier: Apache-2.0
 ```
 
 Use equivalent comments in Python and other source formats. Adjust the year
 and attribution to the actual authorship; retain contributor and upstream
-notices. Keep the exception reference valid when code is packaged or vendored,
-and ship copies of both `LICENSE` and `LICENSE_EXCEPTION` with the plugin and
-Go release archives. Record licensing separately for formats without comments.
+notices. Ship `LICENSE`, `COPYRIGHT`, and applicable third-party notices with
+plugin copies and Go release archives. Record licensing separately for formats
+without comments.
 
-The CLA follows the common Version 1.0 agreement used by Coldsnap and
-Sparkroute, adapted for OCI Relay with Scitrera LLC as the sole Project Owner
-and an explicit reference to the Sparkrun additional permission. It preserves
-the existing copyright and patent grants, commercial licensing terms,
-contributor protections, and Texas/Harris County governing-law provisions.
+The CLA derives from the common agreement used by Coldsnap and Sparkroute,
+with Scitrera LLC as the sole Project Owner. Version 1.1 updates the Project
+License reference to Apache-2.0. It preserves the existing copyright and patent
+grants, commercial licensing terms, contributor protections, and Texas/Harris
+County governing-law provisions.

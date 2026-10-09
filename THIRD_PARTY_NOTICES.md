@@ -1,7 +1,8 @@
 # Third-party notices
 
 OCI Relay's original implementation is copyright 2026 Scitrera LLC, licensed
-under AGPL-3.0-only with the Sparkrun permission in LICENSE_EXCEPTION.
+under the Apache License, Version 2.0 (see LICENSE). Third-party material
+retains the licenses and notices described below.
 
 The executable directly imports Dragonfly's `pkg/stats.RollingWindow` from
 `d7y.io/dragonfly/v2`, pinned to commit `41b312389c90` through the exact

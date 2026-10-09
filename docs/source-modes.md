@@ -1,7 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Scitrera LLC
-SPDX-License-Identifier: AGPL-3.0-only
-SPDX-FileComment: The Sparkrun additional permission in LICENSE_EXCEPTION applies.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # Source modes and manifest input

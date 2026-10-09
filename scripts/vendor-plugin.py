@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 """Vendor the adapter with exact file hashes; never invent a release/commit pin."""
 import argparse
 import ast
@@ -38,7 +37,7 @@ def host_updates(host):
     path = host / 'pyproject.toml'
     original = text = path.read_text()
     data = tomllib.loads(text)
-    required = ['LICENSE', 'LICENSE_EXCEPTION', 'COPYRIGHT', 'CLA.md', 'README.md', 'VENDORED.toml', 'releases.json']
+    required = ['LICENSE', 'COPYRIGHT', 'CLA.md', 'README.md', 'VENDORED.toml', 'releases.json']
     package_data = data.get('tool', {}).get('setuptools', {}).get('package-data', {})
     existing = package_data.get('sparkrun.plugins.oci_relay')
     if existing is not None and not set(required).issubset(existing):
@@ -107,7 +106,7 @@ if not (args.sparkrun / "src/sparkrun/core/image_distribution.py").is_file():
 source = root / "plugin/src/sparkrun_oci_relay"
 files = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob("*")
          if p.is_file() and "__pycache__" not in p.parts and p.suffix in {".py", ".json"}}
-for name in ("LICENSE", "LICENSE_EXCEPTION", "COPYRIGHT", "CLA.md", "README.md"):
+for name in ("LICENSE", "COPYRIGHT", "CLA.md", "README.md"):
     files[name] = (root / name).read_bytes()
 commit = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=root, capture_output=True, text=True)
 revision = commit.stdout.strip() if commit.returncode == 0 else ""

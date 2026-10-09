@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 """Exercise real acquisition -> provider -> host dispatch without SSH or Docker."""
 
 import io

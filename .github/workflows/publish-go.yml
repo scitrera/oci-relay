@@ -100,7 +100,6 @@ jobs:
           mkdir -p "$stage"
           go build -trimpath -ldflags "-s -w -buildid= -X github.com/scitrera/oci-relay/internal/buildinfo.Version=$VERSION -X github.com/scitrera/oci-relay/internal/buildinfo.Commit=$COMMIT" -o "$stage/$bin" ./cmd/oci-relay
           cp "$GITHUB_WORKSPACE/LICENSE" "$stage/"
-          cp "$GITHUB_WORKSPACE/LICENSE_EXCEPTION" "$stage/"
           cp "$GITHUB_WORKSPACE/COPYRIGHT" "$stage/"
           cp "$GITHUB_WORKSPACE/README.md" "$stage/"
           cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/"

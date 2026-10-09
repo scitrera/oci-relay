@@ -16,13 +16,15 @@ do not edit generated workflow YAML independently.
    `unpigz`, `bundle.json` and `UNPIGZ_LICENSES.txt`. No QEMU or cross-architecture
    helper execution. Dispatch the publish workflow before tagging to validate
    native artifacts. Review source pins in `scripts/native-dependencies.json`.
-   Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE, LICENSE_EXCEPTION,
+   Regenerate THIRD_PARTY_LICENSES.txt. Confirm LICENSE,
    COPYRIGHT and dependency notices are included in every binary archive.
-   Verify plugin wheels and vendored copies contain the AGPL license/exception.
+   Verify plugin wheels and vendored copies contain the Apache-2.0 license and
+   copyright notice.
 4. Review and commit the source and generated CI, then push to the public repository. A matching `vVERSION` tag triggers Linux amd64/arm64 archive builds plus
    `checksums.txt`, plus the macOS arm64 archive. Local generation does not
    create or push that tag. See [platform qualification](platforms.md).
-5. Publish release-matched corresponding source alongside binaries. The Git tag
+5. Continue publishing release-matched source alongside binaries for reproducible
+   builds. This is project policy, not an Apache-2.0 source-offer requirement. The Git tag
    must include all source, module pins, CLI/plugin code, versions.yaml and build
    scripts. For a self-contained source bundle, run `go mod vendor` in a clean
    temporary checkout of the tag, retain dependency notices, and archive the
@@ -54,7 +56,7 @@ do not edit generated workflow YAML independently.
    {
      "schema": 1,
      "repository": "https://github.com/scitrera/oci-relay.git",
-     "version": "0.1.2",
+     "version": "0.1.3",
      "commit": "FULL_ADAPTER_COMMIT_SHA"
    }
    ```

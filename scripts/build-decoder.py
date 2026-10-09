@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 """Build a target-native, source-pinned unpigz and populate a release bundle.
 
 Linux builds musl and zlib statically without installing host packages. macOS

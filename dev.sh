@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 # Usage: source dev.sh (optional: export SPARKRUN_CHECKOUT=/path/to/sparkrun)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

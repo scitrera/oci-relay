@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Scitrera LLC
-# SPDX-License-Identifier: AGPL-3.0-only
-# Additional permission under AGPLv3 section 7: see LICENSE_EXCEPTION.
+# SPDX-License-Identifier: Apache-2.0
 from pathlib import Path
 import subprocess
 import sys
@@ -26,7 +25,10 @@ def test_explicit_vendoring_installs_bindings_and_refuses_tampering(tmp_path):
     exec((core / 'in_tree_plugins.py').read_text(), state)
     assert state['IN_TREE_PLUGIN_FEATURES']['oci_relay'] == 'plugins.oci_relay'
     metadata = tomllib.loads((tmp_path / 'pyproject.toml').read_text())
-    assert 'LICENSE_EXCEPTION' in metadata['tool']['setuptools']['package-data']['sparkrun.plugins.oci_relay']
+    assert 'LICENSE' in metadata['tool']['setuptools']['package-data']['sparkrun.plugins.oci_relay']
+    vendored = tmp_path / 'src/sparkrun/plugins/oci_relay'
+    assert (vendored / 'LICENSE').read_bytes() == (ROOT / 'LICENSE').read_bytes()
+    assert not (vendored / 'LICENSE_EXCEPTION').exists()
     assert metadata['tool']['ruff']['extend-exclude'] == ['other', 'src/sparkrun/plugins/oci_relay']
     before = {str(p): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
     subprocess.run([*command, '--development'], check=True, capture_output=True)
