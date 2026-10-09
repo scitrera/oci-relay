@@ -35,8 +35,8 @@ deactivate
 The setup builds the relay and native decoder, installs both projects editably, and enables the
 plugin in a private development configuration. It preserves normal user
 configuration and keeps the plugin outside Sparkrun's source tree. Image-transfer
-progress is visible by default. The bundled plugin defaults on for alpha and
-off for other channels; this setup explicitly selects the editable adapter. See [development setup](docs/development.md)
+progress is visible by default. The bundled plugin defaults on for beta/alpha and
+off for stable; this setup explicitly selects the editable adapter. See [development setup](docs/development.md)
 for details or [plugin configuration](docs/sparkrun-plugin.md) for manual setup.
 
 To build the standalone executable:

@@ -20,7 +20,7 @@ def host_updates(host):
          '\n\n# Optional OCI Relay binding, installed by scripts/vendor-plugin.py.\n'
          'FEATURE_PLUGIN_OCI_RELAY = register_feature(\n'
          '    FeatureFlag(name="plugins.oci_relay", description="OCI Relay image distribution",\n'
-         '                channel_defaults={"alpha": True}, default=False)\n)\n'),
+         '                channel_defaults={"beta": True, "alpha": True}, default=False)\n)\n'),
         ('src/sparkrun/core/in_tree_plugins.py', r'[\'"]oci_relay[\'"]\s*(?:\]\s*=|:)\s*[\'"]plugins\.oci_relay[\'"]',
          '\n\n# Optional OCI Relay binding, installed by scripts/vendor-plugin.py.\n'
          'IN_TREE_PLUGIN_FEATURES["oci_relay"] = "plugins.oci_relay"\n'),
@@ -159,4 +159,4 @@ finally:
     if temporary.exists():
         shutil.rmtree(temporary)
 print("Vendored OCI Relay", version, "development snapshot" if args.development else revision, content_hash)
-print("Bundled adapter defaults on for alpha and off otherwise; disable the installed copy before using it.")
+print("Bundled adapter defaults on for beta/alpha and off for stable; disable the installed copy before using it.")

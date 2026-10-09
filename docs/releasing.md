@@ -66,8 +66,8 @@ do not edit generated workflow YAML independently.
    The script resolves this published descriptor rather than a floating branch,
    validates host APIs and all archive pins, and verifies engine ancestry.
    It records exact file hashes in `vendor/oci-relay.lock` and imports offline
-   contract tests. The bundled `plugins.oci_relay` feature defaults on only for
-   alpha. Keep installed and bundled registration mutually exclusive.
+   contract tests. The bundled `plugins.oci_relay` feature defaults on for
+   beta and alpha. Keep installed and bundled registration mutually exclusive.
 8. A development snapshot uses explicit `--development` and has
    `development_snapshot = true`. Do not describe it as a public release pin.
    Development binaries similarly require explicit configuration.
