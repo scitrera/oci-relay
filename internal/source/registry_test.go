@@ -29,6 +29,20 @@ import (
 	"github.com/scitrera/oci-relay/internal/transfer"
 )
 
+// A real native executable exercises Docker's helper lookup and stdin/stdout
+// contract on Windows as well as Unix, without relying on a shell script.
+func TestMain(m *testing.M) {
+	if os.Getenv("OCI_RELAY_TEST_CREDENTIAL_HELPER") == "1" {
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+		if err != nil || len(os.Args) != 2 || os.Args[1] != "get" || strings.TrimSpace(string(raw)) != "registry.example" {
+			os.Exit(2)
+		}
+		fmt.Println(`{"Username":"<token>","Secret":"refresh-secret"}`)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 type registryFixture struct {
 	manifest, config, blob, index            []byte
 	manifestDigest, configDigest, blobDigest digest.Digest
@@ -553,10 +567,21 @@ func TestRegistryDiskWriteFailureDoesNotPublishCache(t *testing.T) {
 func TestRegistryCredentialHelperAndIdentityToken(t *testing.T) {
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "docker-credential-fixture")
-	script := "#!/bin/sh\nread registry\n[ \"$registry\" = \"registry.example\" ] || exit 2\nprintf '%s\\n' '{\"Username\":\"<token>\",\"Secret\":\"refresh-secret\"}'\n"
-	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	executable, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCI_RELAY_TEST_CREDENTIAL_HELPER", "1")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	config := filepath.Join(dir, "config.json")
 	_ = os.WriteFile(config, []byte(`{"credHelpers":{"registry.example":"fixture"}}`), 0600)
