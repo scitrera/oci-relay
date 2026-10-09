@@ -10,7 +10,7 @@ import (
 	"github.com/moby/moby/client"
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/testutil"
+	"github.com/spark-arena/oci-relay/internal/testutil"
 )
 
 func TestBackendIdentityUsesConfigOrManifestAndExactRootFS(t *testing.T) {

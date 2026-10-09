@@ -11,7 +11,7 @@ import (
 	"net/http"
 
 	digest "github.com/opencontainers/go-digest"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 type negotiation struct {

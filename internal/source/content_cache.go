@@ -11,7 +11,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/fileio"
+	"github.com/spark-arena/oci-relay/internal/fileio"
 )
 
 // ContentCache probes only requested CAS paths, retaining open file descriptors

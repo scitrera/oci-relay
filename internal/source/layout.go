@@ -9,8 +9,8 @@ import (
 	"os"
 
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/fileio"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/fileio"
+	"github.com/spark-arena/oci-relay/internal/image"
 )
 
 type Layout struct{ Root string }

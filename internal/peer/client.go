@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/spark-arena/oci-relay/internal/image"
 	"io"
 	"net"
 	"net/http"

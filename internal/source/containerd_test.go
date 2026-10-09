@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	digest "github.com/opencontainers/go-digest"
-	"github.com/scitrera/oci-relay/internal/testutil"
-	"github.com/scitrera/oci-relay/internal/transfer"
+	"github.com/spark-arena/oci-relay/internal/testutil"
+	"github.com/spark-arena/oci-relay/internal/transfer"
 )
 
 func TestContainerdPreservesCompressedContentAndIndex(t *testing.T) {
