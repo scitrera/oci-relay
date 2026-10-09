@@ -4,6 +4,9 @@
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
+import platform
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -88,3 +91,35 @@ def test_windows_executable_hash_and_architecture(tmp_path, arch, machine):
     path.write_bytes(b'tampered')
     with pytest.raises(release.BinaryInvalid, match='checksum'):
         release.acquire(arch, settings, offline=True, os_name='windows')
+
+
+@pytest.mark.skipif(platform.system() != 'Windows', reason='native Windows file/ACL behavior')
+def test_native_windows_controller_staging_and_private_files(tmp_path):
+    from sparkrun_oci_relay import __version__
+    from sparkrun_oci_relay.host import Runner
+
+    binary = Path(__file__).resolve().parents[2] / 'bin' / 'oci-relay.exe'
+    if not binary.is_file():
+        pytest.fail('build bin/oci-relay.exe before the native Windows test')
+    def execute(host, arguments, **kwargs):
+        result = subprocess.run(arguments, input=kwargs.get('input_data'), capture_output=True,
+                                timeout=kwargs.get('timeout', 30), check=False)
+        return Result(result.returncode, result.stdout, result.stderr)
+    runner = Runner.__new__(Runner)
+    runner.settings = {'remote_cache_dir': str(tmp_path / 'cache')}
+    runner.binaries, runner.attachments = {}, {}
+    runner.processes, runner.directories, runner.containers = [], [], []
+    runner.local = SimpleNamespace(execute=execute, close=lambda: None)
+    runner.connection = lambda host: runner.local
+    try:
+        digest = release.file_digest(binary)
+        staged = runner.stage_binary(None, binary, digest, __version__)
+        assert staged.endswith('.exe') and release.file_digest(Path(staged)) == digest
+        assert runner.stage_binary(None, binary, digest, __version__) == staged
+        directory = runner.directory(None)
+        path = directory + '/peer.json'
+        runner.write(None, path, b'\x00\xff\r\ncredentials')
+        assert runner.read(None, path) == b'\x00\xff\r\ncredentials'
+    finally:
+        assert runner.close() == []
+    assert not Path(directory).exists()
