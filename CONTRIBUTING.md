@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 Scitrera LLC
+SPDX-FileCopyrightText: 2026 Spark Arena
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -15,12 +15,12 @@ Contributions are licensed under [Apache-2.0](LICENSE).
 Submit only work you authored or are authorized to contribute, including any
 required employer authorization. Identify third-party material and its source
 and license. Preserve its original notices; do not attribute imported code
-solely to Scitrera LLC or assume the project's license changes its license.
+solely to Spark Arena or assume the project's license changes its license.
 
-For new Scitrera-authored Go files, use:
+For new Go files authored by Spark Arena, use:
 
 ```go
-// SPDX-FileCopyrightText: 2026 Scitrera LLC
+// SPDX-FileCopyrightText: 2026 Spark Arena
 // SPDX-License-Identifier: Apache-2.0
 ```
 

@@ -1,6 +1,6 @@
 # Third-party notices
 
-OCI Relay's original implementation is copyright 2026 Scitrera LLC, licensed
+OCI Relay's original implementation is copyright 2026 Spark Arena, licensed
 under the Apache License, Version 2.0 (see LICENSE). Third-party material
 retains the licenses and notices described below.
 

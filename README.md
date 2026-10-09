@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 Scitrera LLC
+SPDX-FileCopyrightText: 2026 Spark Arena
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -35,8 +35,8 @@ deactivate
 The setup builds the relay and native decoder, installs both projects editably, and enables the
 plugin in a private development configuration. It preserves normal user
 configuration and keeps the plugin outside Sparkrun's source tree. Image-transfer
-progress is visible by default. The bundled plugin defaults on for beta/alpha and
-off for stable; this setup explicitly selects the editable adapter. See [development setup](docs/development.md)
+progress is visible by default. The bundled plugin defaults on for every channel;
+this setup explicitly selects the editable adapter. See [development setup](docs/development.md)
 for details or [plugin configuration](docs/sparkrun-plugin.md) for manual setup.
 
 To build the standalone executable:
@@ -63,7 +63,7 @@ CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
 
 ## License and contributions
 
-Copyright 2026 Scitrera LLC. OCI Relay and its Sparkrun plugin are licensed
+Copyright 2026 Spark Arena. OCI Relay and its Sparkrun plugin are licensed
 under [Apache-2.0](LICENSE).
 
 See [third-party notices](THIRD_PARTY_NOTICES.md) and
