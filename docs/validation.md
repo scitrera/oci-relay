@@ -679,3 +679,39 @@ confirmed v0.1.2 and the tagged commit on every execution host. The focused
 host/installer/fallback/range suite passed 96 tests after this logging change.
 No engine code changed after tagging. Platform limitations remain as described
 in [platform qualification](platforms.md).
+
+## Apache licensing and patched toolchain — v0.1.3 (2026-10-09)
+
+OCI Relay and its plugin now use Apache-2.0. First-party headers, package
+metadata, the CLA's Project License reference, vendoring and binary packaging
+were updated; the former Sparkrun-specific exception was removed. Copyright
+and third-party notices were preserved. The current alpha adapter pins only
+the matching v0.1.3 engine; no older-release compatibility path is maintained.
+
+The engine tag pins `0ed36d35927819d9bba9b7ed4e1384f75a946761`.
+Both [pre-tag native qualification](https://github.com/scitrera/oci-relay/actions/runs/37951023726)
+and the [tagged release workflow](https://github.com/scitrera/oci-relay/actions/runs/37952111458)
+passed on Linux AMD64, Linux ARM64 and macOS ARM64. Builds used native runners,
+without QEMU. Qualification initially found newly published standard-library
+vulnerabilities in Go 1.25.14, so the minimum and build toolchain were raised to
+[Go 1.26.9](https://go.dev/doc/devel/release#go1.26.0) and govulncheck to v1.3.0.
+Local race tests, vet, dependency-license checks and the subsequent vulnerability
+scan passed; all 359 plugin tests passed with real Docker integration enabled.
+There are no application-level Go transfer changes in this release.
+
+All three published bundles passed independent archive/binary checksum,
+architecture, version/platform, native source-pin and license checks. Apache
+LICENSE and COPYRIGHT contents matched the repository, and the obsolete
+exception was absent. Wheel and sdist checks verified the version, Apache
+metadata, license contents and current release pins. The source archive matched
+all 141 tagged files and rebuilt the relay and native ARM64 helper with dependency
+downloads disabled. Both Linux bundles passed offline installation checks.
+
+The normal plugin installer downloaded the published ARM64 bundle for fresh,
+one-new-layer and warm registry imports on `.13` and `.17`, using both CX7
+subnets and two connections per link. Every connection carried payload when
+layers were missing; each missing roughly 32 MiB fixture layer used five upstream
+ranges shared by both receivers. The update reused its base, and the warm run
+fetched/transferred no layer bytes. Exact config identities and ordered DiffIDs
+matched. These small fixtures verify correctness, not throughput. Owned images
+and operation resources were removed; no model was launched or daemon configured.

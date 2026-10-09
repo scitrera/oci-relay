@@ -9,7 +9,7 @@ Run these commands from the repository root.
 
 ## Build and test
 
-Go 1.25 or newer and Python 3.12 or newer are required. CI uses Go 1.25.14.
+Go 1.26.9 or newer and Python 3.12 or newer are required. CI uses Go 1.26.9.
 The generated release builds are static Linux amd64 and arm64 executables.
 
 ```sh
