@@ -51,7 +51,7 @@ func newRegistryFixtureSize(t testing.TB, size int) *registryFixture {
 	gz := gzip.NewWriter(&compressed)
 	_, _ = gz.Write(raw)
 	_ = gz.Close()
-	platform := v1.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH}
+	platform := v1.Platform{OS: "linux", Architecture: runtime.GOARCH}
 	cfg, _ := json.Marshal(v1.Image{Platform: platform, RootFS: v1.RootFS{Type: "layers", DiffIDs: []digest.Digest{digest.FromBytes(raw)}}})
 	f := &registryFixture{config: cfg, blob: compressed.Bytes()}
 	f.configDigest = digest.FromBytes(cfg)

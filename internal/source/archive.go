@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/moby/moby/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/scitrera/oci-relay/internal/engine"
 	"github.com/scitrera/oci-relay/internal/fileio"
 	"github.com/scitrera/oci-relay/internal/image"
+	"github.com/scitrera/oci-relay/internal/privatefs"
 )
 
 type ArchiveOptions struct {
@@ -69,6 +69,10 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 	if err != nil {
 		return nil, err
 	}
+	if err = privatefs.Ensure(dir); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
 	a := &Archive{dir: dir}
 	defer func() {
 		if returnErr != nil {
@@ -79,11 +83,7 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 	if err != nil {
 		return nil, err
 	}
-	var options []client.ImageSaveOption
-	if o.Platform.OS != "" {
-		options = append(options, client.ImageSaveWithPlatforms(o.Platform))
-	}
-	r, err := eng.Client.ImageSave(ctx, []string{id}, options...)
+	r, err := eng.Save(ctx, id, o.Platform)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,11 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 		return nil, err
 	}
 	if inspected.Descriptor == nil {
-		a.Image, err = image.LoadLayoutReader(a.read, "", o.Platform)
+		if _, ok := a.entries["oci-layout"]; ok {
+			a.Image, err = image.LoadLayoutReader(a.read, "", o.Platform)
+		} else {
+			a.Image, err = a.classic(o.Platform, id)
+		}
 	} else {
 		// Exported indexes can retain attestations and other platforms. Resolve
 		// only the exact platform manifest already pinned by Docker inspection.
@@ -157,7 +161,7 @@ func NewArchive(ctx context.Context, eng *engine.Engine, o ArchiveOptions) (_ *A
 	}
 	for _, d := range a.Image.Descriptors {
 		name, _ := image.BlobPath("", d.Digest)
-		s, ok := a.entries[name]
+		s, ok := a.entries[filepath.ToSlash(name)]
 		if !ok || s.size != d.Size {
 			return nil, fmt.Errorf("archive blob missing or wrong size: %s", d.Digest)
 		}
@@ -196,7 +200,7 @@ func (a *Archive) index(ctx context.Context) error {
 		if h.Typeflag != tar.TypeReg {
 			return errors.New("archive links and special files are unsupported")
 		}
-		if _, exists := a.entries[name]; exists {
+		if _, exists := a.entries[filepath.ToSlash(name)]; exists {
 			return errors.New("archive contains duplicate file names")
 		}
 		offset, err := a.file.Seek(0, io.SeekCurrent)
@@ -211,7 +215,8 @@ func (a *Archive) index(ctx context.Context) error {
 }
 
 func (a *Archive) read(name string, limit int64) ([]byte, error) {
-	s, ok := a.entries[name]
+	name = filepath.ToSlash(name)
+	s, ok := a.entries[filepath.ToSlash(name)]
 	if !ok {
 		return nil, fmt.Errorf("archive entry %q missing", name)
 	}
@@ -227,7 +232,7 @@ func (a *Archive) Fetch(ctx context.Context, d v1.Descriptor, w io.Writer) error
 		return errors.New("descriptor not in prepared archive")
 	}
 	name, _ := image.BlobPath("", d.Digest)
-	s := a.entries[name]
+	s := a.entries[filepath.ToSlash(name)]
 	r := fileio.NewReader(a.file, s.offset, s.size)
 	defer r.Close()
 	buf := make([]byte, 256<<10)

@@ -6,6 +6,7 @@ package source
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -44,7 +45,7 @@ func archiveFixture(t *testing.T) ([]byte, *image.Image) {
 			return err
 		}
 		rel, _ := filepath.Rel(root, name)
-		if err = tw.WriteHeader(&tar.Header{Name: rel, Mode: 0600, Size: int64(len(b))}); err != nil {
+		if err = tw.WriteHeader(&tar.Header{Name: filepath.ToSlash(rel), Mode: 0600, Size: int64(len(b))}); err != nil {
 			return err
 		}
 		_, err = tw.Write(b)
@@ -232,5 +233,55 @@ func TestContainerdArchivePinsPlatformManifestInsteadOfConfigID(t *testing.T) {
 	defer archive.Close()
 	if archive.Image.Digest != im.Digest || archive.Image.Descriptors[0].Digest != im.Descriptors[0].Digest {
 		t.Fatal("wrong containerd export identity")
+	}
+}
+
+func TestClassicArchiveUsesPinnedConfigAndVerifiedRawLayers(t *testing.T) {
+	root, im := testutil.Layout(t, 128<<10)
+	layerPath, _ := image.BlobPath(root, im.Descriptors[1].Digest)
+	compressed, err := os.ReadFile(layerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layer, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = gz.Close()
+	var data bytes.Buffer
+	tw := tar.NewWriter(&data)
+	metadata, _ := json.Marshal([]map[string]any{{"Config": "config.json", "Layers": []string{"layer/layer.tar"}}})
+	for name, body := range map[string][]byte{"config.json": im.Config, "layer/layer.tar": layer, "manifest.json": metadata} {
+		if err = tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e := archiveEngine(t, string(im.Descriptors[0].Digest), func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(data.Bytes()) })
+	a, err := NewArchive(context.Background(), e, ArchiveOptions{Reference: "fixture", MaxSpool: 4 << 20, SpoolDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if !bytes.Equal(a.Image.Config, im.Config) || a.Image.Descriptors[1].Digest != digest.FromBytes(layer) {
+		t.Fatal("classic archive identity changed")
+	}
+	for _, d := range a.Image.Descriptors {
+		var out bytes.Buffer
+		if err = a.Fetch(context.Background(), d, &out); err != nil {
+			t.Fatal(err)
+		}
+		if err = image.Verify(out.Bytes(), d); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

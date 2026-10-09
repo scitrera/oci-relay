@@ -3,10 +3,10 @@
 // SPDX-FileCopyrightText: 2026 Scitrera LLC
 // SPDX-License-Identifier: Apache-2.0
 
-package peer
+package privatefs
 
 import "errors"
 
-func availableDisk(string) (int64, error) {
-	return 0, errors.New("decoder disk accounting unsupported on this platform")
+func Available(string) (int64, error) {
+	return 0, errors.New("disk accounting unsupported on this platform")
 }

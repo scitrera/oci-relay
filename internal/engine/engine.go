@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/distribution/reference"
 	"github.com/moby/moby/client"
@@ -18,23 +17,28 @@ import (
 	"github.com/scitrera/oci-relay/internal/image"
 )
 
-type Engine struct{ Client *client.Client }
-
-func New(host string) (*Engine, error) {
-	if host == "" {
-		host = "unix:///var/run/docker.sock"
-	}
-	if !strings.HasPrefix(host, "unix://") {
-		return nil, errors.New("only explicit local unix Docker sockets are supported")
-	}
-	cli, err := client.New(client.WithHost(host))
-	if err != nil {
-		return nil, err
-	}
-	return &Engine{cli}, nil
+type Engine struct {
+	Client *client.Client
+	wslc   *wslcRuntime
 }
-func (e *Engine) Close() error { return e.Client.Close() }
+
+func New(host string) (*Engine, error) { return Open(Config{DockerHost: host}) }
+func (e *Engine) Close() error {
+	if e.Client == nil {
+		return nil
+	}
+	return e.Client.Close()
+}
+func (e *Engine) Runtime() string {
+	if e.wslc != nil {
+		return "wslc"
+	}
+	return "docker"
+}
 func (e *Engine) Inspect(ctx context.Context, ref string) (client.ImageInspectResult, error) {
+	if e.wslc != nil {
+		return e.wslc.inspect(ctx, ref)
+	}
 	return e.Client.ImageInspect(ctx, ref)
 }
 
@@ -67,14 +71,23 @@ func MatchesImage(info client.ImageInspectResult, im *image.Image) bool {
 	return info.ID == string(im.Descriptors[0].Digest)
 }
 func (e *Engine) Tag(ctx context.Context, src, dst string) error {
+	if e.wslc != nil {
+		return e.wslc.simple(ctx, "image", "tag", src, dst)
+	}
 	_, err := e.Client.ImageTag(ctx, client.ImageTagOptions{Source: src, Target: dst})
 	return err
 }
 func (e *Engine) RemoveTag(ctx context.Context, tag string) error {
+	if e.wslc != nil {
+		return e.wslc.remove(ctx, tag)
+	}
 	_, err := e.Client.ImageRemove(ctx, tag, client.ImageRemoveOptions{})
 	return err
 }
 func (e *Engine) Push(ctx context.Context, ref string, platform ...v1.Platform) error {
+	if e.wslc != nil {
+		return errors.New("WSLC push sources require docker-save; no daemon loopback route is assumed")
+	}
 	options := client.ImagePushOptions{RegistryAuth: "e30="}
 	if len(platform) > 0 {
 		options.Platform = &platform[0]
@@ -86,6 +99,9 @@ func (e *Engine) Push(ctx context.Context, ref string, platform ...v1.Platform) 
 	return progress(ctx, r)
 }
 func (e *Engine) Pull(ctx context.Context, ref string, p v1.Platform, observe ...func(Progress)) error {
+	if e.wslc != nil {
+		return errors.New("WSLC requires archive import; no daemon loopback route is assumed")
+	}
 	r, err := e.Client.ImagePull(ctx, ref, client.ImagePullOptions{Platforms: []v1.Platform{p}})
 	if err != nil {
 		return err
@@ -93,6 +109,9 @@ func (e *Engine) Pull(ctx context.Context, ref string, p v1.Platform, observe ..
 	return progress(ctx, r, observe...)
 }
 func (e *Engine) Load(ctx context.Context, input io.Reader) error {
+	if e.wslc != nil {
+		return errors.New("WSLC requires an explicitly bounded archive import")
+	}
 	r, err := e.Client.ImageLoad(ctx, input, client.ImageLoadWithQuiet(true))
 	if err != nil {
 		return err

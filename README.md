@@ -55,6 +55,7 @@ CGO_ENABLED=0 go build -trimpath -o bin/oci-relay ./cmd/oci-relay
 - [Bundled receiver decoding](docs/bundled-decoder.md): helper installation, disk budgets, and fallback.
 - [Storage compatibility](docs/storage-compatibility.md): native access, layer
   discovery, mixed stores, and hash identities.
+- [Windows and runtime connections](docs/platforms.md): candidate support, Desktop/WSLC paths, and qualification limits.
 - [Standalone commands](docs/standalone.md): sessions, events, and transfer-only validation.
 - [Development](docs/development.md): tests, CI, versions, and vendoring;
   [release procedure](docs/releasing.md).

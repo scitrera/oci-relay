@@ -1,0 +1,61 @@
+# Project-specific runtime qualification. Release workflows remain generated
+# from versions.yaml by repo-tools; this does not publish release assets.
+name: Windows qualification
+
+on:
+  pull_request:
+    branches: [main, develop-next]
+  push:
+    branches: [main, develop-next]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-2025, arch: amd64}
+          - {runner: windows-11-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Test and build on native Windows
+        shell: pwsh
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((go env GOHOSTOS) -ne 'windows' -or (go env GOHOSTARCH) -ne $env:EXPECTED_ARCH) {
+            throw 'A native Windows runner of the requested architecture is required'
+          }
+          go test -count=1 ./internal/engine ./internal/privatefs ./internal/image ./internal/transfer ./internal/peer
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go test -count=1 ./internal/source -run 'TestArchive|TestClassicArchive|TestRegistry'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go build -trimpath -o bin/oci-relay.exe ./cmd/oci-relay
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./bin/oci-relay.exe version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install --no-deps -e .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install pytest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pytest -q plugin/tests/test_runtime.py plugin/tests/test_release.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Save candidate executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: oci-relay-windows-${{ matrix.arch }}-candidate
+          path: bin/oci-relay.exe
+          if-no-files-found: error
