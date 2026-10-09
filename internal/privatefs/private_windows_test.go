@@ -7,8 +7,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestWindowsPrivateDirectoryAndDisk(t *testing.T) {
@@ -29,9 +29,38 @@ func TestWindowsPrivateDirectoryAndDisk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sddl := sd.String()
-		if !strings.Contains(sddl, user.User.Sid.String()) || strings.Contains(sddl, ";;;WD)") || strings.Contains(sddl, ";;;BU)") || strings.Contains(sddl, ";;;AU)") {
-			t.Fatalf("unexpected DACL: %s", sddl)
+		acl, _, err := sd.DACL()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acl == nil || acl.AceCount != 2 {
+			t.Fatal("private directory must grant exactly user and SYSTEM")
+		}
+		system, err := windows.StringToSid("S-1-5-18")
+		if err != nil {
+			t.Fatal(err)
+		}
+		seenUser, seenSystem := false, false
+		for i := uint32(0); i < uint32(acl.AceCount); i++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			if err = windows.GetAce(acl, i, &ace); err != nil {
+				t.Fatal(err)
+			}
+			if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+				t.Fatal("unexpected ACE type")
+			}
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+			switch {
+			case sid.Equals(user.User.Sid):
+				seenUser = true
+			case sid.Equals(system):
+				seenSystem = true
+			default:
+				t.Fatalf("unexpected principal %s", sid.String())
+			}
+		}
+		if !seenUser || !seenSystem {
+			t.Fatal("missing user or SYSTEM access")
 		}
 	}
 	available, err := Available(root)

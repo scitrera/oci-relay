@@ -167,6 +167,17 @@ func TestHTTP2LargeReceiveWindow(t *testing.T) {
 
 func TestStripeFailureRetriesWholeBlobOnSurvivors(t *testing.T) {
 	ctx, _, c := stripeFixture(t)
+	// Force the failed connection to be ready before the final lane joins.
+	// Without the server join barrier, this yields a setup HTTP 503 instead
+	// of the retryable body failure on the broken connection.
+	late := c.paths.paths[len(c.paths.paths)-1]
+	lateTransport := late.client.HTTP.Transport
+	late.client.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/stripes/") {
+			time.Sleep(25 * time.Millisecond)
+		}
+		return lateTransport.RoundTrip(r)
+	})
 	path := c.paths.paths[0]
 	original := path.client.HTTP.Transport
 	path.client.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
