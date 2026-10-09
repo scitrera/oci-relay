@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 Scitrera LLC
+SPDX-FileCopyrightText: 2026 Spark Arena
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -83,10 +83,10 @@ python scripts/vendor-plugin.py --sparkrun /path/to/target-sparkrun --check
 ```
 
 Vendoring is never invoked by `dev.sh`. The script copies the adapter and license
-material, adds an alpha-enabled `plugins.oci_relay` feature and in-tree
+material, adds a default-enabled `plugins.oci_relay` feature and in-tree
 loader binding, and includes license/release files in host package metadata.
 It also excludes the immutable vendor directory from host Ruff checks. Review
-those target-tree changes before committing. After bundling, the feature defaults on for alpha and off for stable/beta.
+those target-tree changes before committing. After bundling, the feature defaults on for every channel.
 Use the `plugins.oci_relay` key under `features` for an explicit override, with
 the installed integration disabled. `--check` verifies both snapshot hashes and host bindings;
 include that check in the future host release process.

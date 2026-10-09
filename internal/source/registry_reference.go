@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 The Dragonfly Authors
-// SPDX-FileCopyrightText: 2026 Scitrera LLC
+// SPDX-FileCopyrightText: 2026 Spark Arena
 // SPDX-License-Identifier: Apache-2.0
 //
 // Adapted from Dragonfly pkg/oci/image.go and reference.go at

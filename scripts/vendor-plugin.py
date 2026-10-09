@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-FileCopyrightText: 2026 Spark Arena
 # SPDX-License-Identifier: Apache-2.0
 """Vendor the adapter with exact file hashes; never invent a release/commit pin."""
 import argparse
@@ -13,14 +13,14 @@ import subprocess
 import tomllib
 
 def host_updates(host):
-    """Plan opt-in bindings before writing anything to the target checkout."""
+    """Plan plugin bindings before writing anything to the target checkout."""
     updates = {}
     bindings = [
         ('src/sparkrun/core/features.py', r'name\s*=\s*[\'"]plugins\.oci_relay[\'"]',
          '\n\n# Optional OCI Relay binding, installed by scripts/vendor-plugin.py.\n'
          'FEATURE_PLUGIN_OCI_RELAY = register_feature(\n'
          '    FeatureFlag(name="plugins.oci_relay", description="OCI Relay image distribution",\n'
-         '                channel_defaults={"alpha": True}, default=False)\n)\n'),
+         '                default=True)\n)\n'),
         ('src/sparkrun/core/in_tree_plugins.py', r'[\'"]oci_relay[\'"]\s*(?:\]\s*=|:)\s*[\'"]plugins\.oci_relay[\'"]',
          '\n\n# Optional OCI Relay binding, installed by scripts/vendor-plugin.py.\n'
          'IN_TREE_PLUGIN_FEATURES["oci_relay"] = "plugins.oci_relay"\n'),
@@ -159,4 +159,4 @@ finally:
     if temporary.exists():
         shutil.rmtree(temporary)
 print("Vendored OCI Relay", version, "development snapshot" if args.development else revision, content_hash)
-print("Bundled adapter defaults on for alpha and off otherwise; disable the installed copy before using it.")
+print("Bundled adapter defaults on for every channel; disable the installed copy before using it.")

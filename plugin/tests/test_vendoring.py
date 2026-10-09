@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-FileCopyrightText: 2026 Spark Arena
 # SPDX-License-Identifier: Apache-2.0
 from pathlib import Path
 import subprocess
@@ -21,7 +21,7 @@ def test_explicit_vendoring_installs_bindings_and_refuses_tampering(tmp_path):
     state = {}
     exec((core / 'features.py').read_text(), state)
     assert state['registered'] == [{'name': 'plugins.oci_relay', 'description': 'OCI Relay image distribution',
-                                    'channel_defaults': {'alpha': True}, 'default': False}]
+                                    'default': True}]
     exec((core / 'in_tree_plugins.py').read_text(), state)
     assert state['IN_TREE_PLUGIN_FEATURES']['oci_relay'] == 'plugins.oci_relay'
     metadata = tomllib.loads((tmp_path / 'pyproject.toml').read_text())

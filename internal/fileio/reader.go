@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Scitrera LLC
+// SPDX-FileCopyrightText: 2026 Spark Arena
 // SPDX-License-Identifier: Apache-2.0
 
 // Package fileio provides bounded sequential reads of already-open local data

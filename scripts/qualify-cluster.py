@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-FileCopyrightText: 2026 Spark Arena
 # SPDX-License-Identifier: Apache-2.0
 """Opt-in qualification: only the explicitly listed Docker hosts are modified."""
 import argparse

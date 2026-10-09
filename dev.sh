@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-FileCopyrightText: 2026 Spark Arena
 # SPDX-License-Identifier: Apache-2.0
 # Usage: source dev.sh (optional: export SPARKRUN_CHECKOUT=/path/to/sparkrun)
 

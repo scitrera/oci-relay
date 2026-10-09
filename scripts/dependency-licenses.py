@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 Scitrera LLC
+# SPDX-FileCopyrightText: 2026 Spark Arena
 # SPDX-License-Identifier: Apache-2.0
 """Collect license and notice files from modules actually linked into the binary."""
 import argparse

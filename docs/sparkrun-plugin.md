@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 Scitrera LLC
+SPDX-FileCopyrightText: 2026 Spark Arena
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -23,13 +23,13 @@ and offline runs can recover those bindings from private host receipts. See
 
 Sparkrun `develop-next` can bundle the release adapter using its
 `vendor-oci-relay.py` script. Its `plugins.oci_relay` feature defaults on for
-alpha and off for stable/beta; explicit feature overrides take precedence.
+every channel; explicit feature overrides take precedence.
 With the bundled provider enabled, normal `container_distribution_provider: auto`
-selects it. To opt in on stable/beta (or set `false` to opt out on alpha):
+selects it. To opt out on any channel:
 
 ```yaml
 features:
-  plugins.oci_relay: true
+  plugins.oci_relay: false
 ```
 
 The independently installed plugin remains available. `source dev.sh` enables
