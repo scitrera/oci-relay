@@ -1,6 +1,6 @@
 module github.com/scitrera/oci-relay
 
-go 1.25.0
+go 1.26.9
 
 require (
 	d7y.io/dragonfly/v2 v2.5.3-rc.0.0.20260929132700-41b312389c90

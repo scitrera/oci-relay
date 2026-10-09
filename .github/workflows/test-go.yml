@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.14'
+          go-version: '1.26.9'
           cache-dependency-path: ./go.sum
 
       - name: Check Go formatting
@@ -62,11 +62,11 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.14'
+          go-version: '1.26.9'
           cache-dependency-path: ./go.sum
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
 
       - name: Run govulncheck
         working-directory: .

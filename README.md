@@ -22,7 +22,7 @@ arm64 bundles are built and tested on native runners. See [platform support](doc
 
 ## Quick start with Sparkrun
 
-Requires Bash, `uv`, Go 1.25+, Python 3.12+, a C compiler, make, and a Sparkrun `develop-next` / 0.4.0
+Requires Bash, `uv`, Go 1.26.9+, Python 3.12+, a C compiler, make, and a Sparkrun `develop-next` / 0.4.0
 checkout with image-distribution and pre-pull API 1. The default checkout path
 is `../oss-sparkrun`; set `SPARKRUN_CHECKOUT` to use another location.
 
